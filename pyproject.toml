@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wigs"
+version = "0.1.0"
+description = "Wallet Intelligence Graph Scanner — Solana memecoin alpha detection"
+requires-python = ">=3.12"
+dependencies = [
+    # API / server
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+
+    # Config / validation
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.0",
+
+    # Redis / task queue
+    "redis[asyncio]>=5.0.0",
+
+    # Scheduling
+    "apscheduler>=3.10.0",
+
+    # Algorithms / numerics
+    "numpy>=1.26.0",
+    "scipy>=1.13.0",
+    "scikit-learn>=1.5.0",
+    "xgboost>=2.0.0",
+    "python-louvain>=0.16",           # Louvain community detection
+    "networkx>=3.3",                  # Graph construction
+
+    # NLP / embeddings (social novelty score)
+    "sentence-transformers>=3.0.0",
+    "torch>=2.3.0",                   # CPU-only fine for inference; override with CUDA build if GPU available
+
+    # Solana
+    "solders>=0.21.0",                # Solana types + serialization
+
+    # Utilities
+    "tenacity>=8.3.0",                # Retry with backoff
+    "structlog>=24.2.0",              # Structured logging
+    "python-dateutil>=2.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-httpx>=0.30.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wigs"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
