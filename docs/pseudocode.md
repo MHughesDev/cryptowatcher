@@ -1,6 +1,8 @@
-# 05 — End-to-End High-Level Python Pseudocode
+# Implementation Pseudocode
 
-This is intentionally class/function-level pseudocode, not implementation code.
+Class/function-level pseudocode only. Not implementation code.
+
+---
 
 ## Domain enums
 
@@ -43,6 +45,8 @@ class OutcomeLabel(Enum):
     SURVIVOR
     HEAVY_HITTER
 ```
+
+---
 
 ## API client layer
 
@@ -93,6 +97,8 @@ class YouTubeClient:
     def search_video_mentions(terms: list[str], window: TimeWindow) -> VideoMentionSet: ...
 ```
 
+---
+
 ## Repository layer
 
 ```python
@@ -113,7 +119,7 @@ class TokenRepository:
 
 class GraphRepository:
     def add_wallet_token_edge(wallet: str, token_mint: str, event_type: WalletEventType, event_time: datetime) -> None: ...
-    def add_wallet_wallet_edge(source_wallet: str, target_wallet: str, edge_type: str, confidence: float) -> None: ...
+    def add_wallet_wallet_edge(source: str, target: str, edge_type: str, confidence: float) -> None: ...
     def add_token_social_edge(token_mint: str, source: str, mention_time: datetime) -> None: ...
     def get_wallet_cluster(wallet_address: str) -> WalletCluster | None: ...
     def save_cluster(cluster: WalletCluster) -> None: ...
@@ -123,6 +129,8 @@ class AlertRepository:
     def list_unlabeled_alerts() -> list[Alert]: ...
     def save_outcome(outcome: TokenOutcome) -> None: ...
 ```
+
+---
 
 ## Wallet discovery and ranking
 
@@ -146,6 +154,7 @@ class WalletUniverseBuilder:
         precall = discover_kol_precall_wallets(...)
         return deduplicate_and_rank(historical + pre_whale + precall)
 
+
 class WalletQualityModel:
     def calculate_realized_pnl_score(wallet_address: str) -> int: ...
     def calculate_early_entry_score(wallet_address: str) -> int: ...
@@ -160,6 +169,8 @@ class WalletQualityModel:
         return weighted_wallet_quality_score(...)
 ```
 
+---
+
 ## Graph and cluster analysis
 
 ```python
@@ -170,12 +181,15 @@ class WalletClusterer:
     def detect_timing_similarity(wallets: list[str]) -> list[ClusterEdge]: ...
     def build_clusters(edges: list[ClusterEdge]) -> list[WalletCluster]: ...
 
+
 class LeadLagModel:
     def measure_wallet_precedes_wallet(wallet_a: str, wallet_b: str, window: timedelta) -> float: ...
     def measure_wallet_precedes_social(wallet: str, token_mint: str, window: timedelta) -> float: ...
     def measure_wallet_precedes_liquidity_expansion(wallet: str, token_mint: str, window: timedelta) -> float: ...
     def score_pre_whale_edge(wallet_a: str, whale_b: str) -> LeadLagScore: ...
 ```
+
+---
 
 ## Live event pipeline
 
@@ -189,6 +203,7 @@ class WalletEventIngestor:
     def is_candidate_buy(event: WalletEvent) -> bool:
         return event.event_type == BUY and event.token_mint is not None
 
+
 class CandidateMintExtractor:
     def extract_candidate(event: WalletEvent) -> CandidateToken:
         return CandidateToken(
@@ -197,12 +212,15 @@ class CandidateMintExtractor:
             status=PENDING,
         )
 
+
 class EvidenceGraphBuilder:
     def update_graph_from_event(event: WalletEvent) -> None:
         add_wallet_token_edge(...)
         update_wallet_activity_state(...)
         update_candidate_relationships(...)
 ```
+
+---
 
 ## Enrichment pipeline
 
@@ -217,12 +235,14 @@ class MarketVerifier:
     def score_market_context(context: MarketContext) -> int:
         return calculate_liquidity_volume_route_score(context)
 
+
 class ExecutionVerifier:
     def check_sellability(token_mint: str) -> SellabilityReport:
         quote_025 = JupiterClient.quote(token_mint, SOL_MINT, amount_025_sol_equivalent, slippage_bps=500)
         quote_1 = JupiterClient.quote(token_mint, SOL_MINT, amount_1_sol_equivalent, slippage_bps=500)
         quote_5 = JupiterClient.quote(token_mint, SOL_MINT, amount_5_sol_equivalent, slippage_bps=500)
         return build_sellability_report([quote_025, quote_1, quote_5])
+
 
 class SafetyVetoEngine:
     def check_token_authorities(token_mint: str) -> AuthorityReport: ...
@@ -242,7 +262,9 @@ class SafetyVetoEngine:
         return RiskReport(vetoes=vetoes, penalties=penalties)
 ```
 
-## Social and narrative confirmation
+---
+
+## Social and narrative verification
 
 ```python
 class SocialTrendVerifier:
@@ -267,6 +289,7 @@ class SocialTrendVerifier:
     def score_social_evidence(evidence: SocialEvidence) -> int:
         return weighted_social_velocity_score(evidence)
 
+
 class NarrativeMatcher:
     def classify_narrative(token: CandidateToken, evidence: SocialEvidence) -> NarrativeType:
         # animal, political, AI, celebrity, news event, culture meme, derivative, unknown
@@ -275,31 +298,31 @@ class NarrativeMatcher:
     def detect_fake_social_spam(evidence: SocialEvidence) -> bool: ...
 ```
 
-## Evidence scoring
+---
+
+## Evidence fusion scoring
 
 ```python
 class EvidenceFusionScorer:
     def calculate_wallet_score(token_mint: str) -> int:
-        # Based on triggering wallet quality, number of independent wallets, lead-lag strength, and cluster risk.
+        # Based on triggering wallet quality, number of independent wallets,
+        # lead-lag strength, and cluster risk.
         ...
 
-    def calculate_market_score(market_context: MarketContext) -> int:
-        ...
+    def calculate_market_score(market_context: MarketContext) -> int: ...
 
     def calculate_risk_score(risk_report: RiskReport) -> int:
         if risk_report.has_hard_veto():
             return 0
         return 100 - penalty_points(risk_report.penalties)
 
-    def calculate_social_score(social_evidence: SocialEvidence) -> int:
-        ...
+    def calculate_social_score(social_evidence: SocialEvidence) -> int: ...
 
     def calculate_history_score(token_mint: str) -> int:
-        # Creator history, early holder quality, pool age, previous rugs, launch behavior.
+        # Creator history, early holder quality, pool age, prior creator launches.
         ...
 
-    def calculate_execution_score(sellability: SellabilityReport) -> int:
-        ...
+    def calculate_execution_score(sellability: SellabilityReport) -> int: ...
 
     def final_score(context: TokenContext) -> TokenScoreSnapshot:
         risk = calculate_risk_score(context.risk_report)
@@ -320,6 +343,8 @@ class EvidenceFusionScorer:
         return TokenScoreSnapshot(total_score=total, decision=decision, ...)
 ```
 
+---
+
 ## Alerting and audit
 
 ```python
@@ -337,13 +362,16 @@ class AlertPublisher:
         send_to_telegram_or_discord(message)
         return save_alert(...)
 
+
 class AuditLedger:
     def record_decision(token_mint: str, full_context: TokenContext, score: TokenScoreSnapshot) -> None:
         # Store enough data to later explain exactly why the system alerted.
         ...
 ```
 
-## Outcome and feedback loop
+---
+
+## Outcome labeling and feedback loop
 
 ```python
 class OutcomeLabeler:
@@ -351,6 +379,7 @@ class OutcomeLabeler:
     def estimate_tradable_returns(alert: Alert) -> TradableReturnReport: ...
     def classify_outcome(report: TradableReturnReport) -> OutcomeLabel: ...
     def save_outcome(alert: Alert, outcome: TokenOutcome) -> None: ...
+
 
 class WalletReRanker:
     def update_wallet_scores_from_outcomes() -> None:
@@ -360,16 +389,19 @@ class WalletReRanker:
             outcome = get_outcome(alert)
             adjust_wallet_scores(wallets, outcome)
 
+
 class BacktestReplayEngine:
     def replay_historical_window(start: datetime, end: datetime) -> BacktestReport:
-        # Reconstruct events, simulate detection delay, run scoring, estimate realistic exits.
+        # Reconstruct events, simulate detection delay, run scoring,
+        # estimate realistic exits.
         ...
 
-    def compare_strategy_versions(version_a: str, version_b: str) -> StrategyComparison:
-        ...
+    def compare_strategy_versions(version_a: str, version_b: str) -> StrategyComparison: ...
 ```
 
-## Main orchestration
+---
+
+## Main pipeline orchestration
 
 ```python
 class WigsPipeline:
@@ -407,6 +439,8 @@ class WigsPipeline:
 
         return score
 ```
+
+---
 
 ## Scheduled jobs
 

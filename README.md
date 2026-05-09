@@ -1,22 +1,20 @@
-# Memecoin Alpha Radar
+# WIGS — Wallet Intelligence Graph Scanner
 
 A wallet-led Solana memecoin intelligence system.
 
-This repo is designed around one core idea:
-
-> Do not scan every memecoin first. Track the wallets first. Let high-signal wallet movement nominate candidate token mints, then verify those mints through market, liquidity, safety, and social-trend evidence.
+> Do not scan every memecoin first. Track the wallets first. Let high-signal wallet movement nominate candidate token mints, then verify those mints through market, liquidity, safety, and social evidence.
 
 ## System objective
 
-The system should find **watchlist-grade Solana memecoins** by combining:
+Find **watchlist-grade Solana memecoins** by combining:
 
 1. **Wallet evidence** — scout wallets, pre-whale wallets, smart-money wallets, KOL-precall wallets, dev-adjacent wallets, and wallet clusters.
 2. **Market evidence** — price, liquidity, volume, DEX pool age, route quality, spread, volatility, and sell quote realism.
-3. **Safety evidence** — holder concentration, mint/freeze authority, creator activity, suspicious clusters, sellability, liquidity depth, and rug-risk rules.
-4. **Social evidence** — Reddit, Telegram, Discord, YouTube, GDELT/news, and community/ticker/mint-address mention velocity.
+3. **Safety evidence** — holder concentration, mint/freeze authority, creator activity, suspicious clusters, sellability, and rug-risk rules.
+4. **Social evidence** — Reddit, Telegram, Discord, YouTube, GDELT/news, and mention velocity across community, ticker, and mint-address dimensions.
 5. **Historical feedback** — every alert is replayed later to measure whether the wallet signal actually produced tradable upside.
 
-The MVP should output:
+## Output
 
 ```text
 AVOID
@@ -25,23 +23,16 @@ STRONG WATCH
 STRONG CANDIDATE
 ```
 
-It should not start by automatically trading. It should start as a **ranked candidate and alert engine**.
+This is an alert and ranking engine, not an auto-trader. No positions are opened automatically.
 
-## Downloaded document set
+## Docs
 
-| File | Purpose |
+| File | What it covers |
 |---|---|
-| `docs/01_ARCHITECTURE_AND_REPO_MAP.md` | New architecture, repo mapping, and AI description table. |
-| `docs/02_DATA_PIPELINE_AND_ALGORITHMS.md` | End-to-end data pipeline, strategies, wallet-selection methods, scoring, and risk reduction logic. |
-| `docs/03_DATA_SOURCES_AND_APIS.md` | Free-tier/public APIs and exactly what each is used for. |
-| `docs/04_ORM_AND_DATA_MODELS.md` | PostgreSQL ORM/data model plan. |
-| `docs/05_PSEUDOCODE.md` | High-level Python class/function pseudocode for the whole system. |
-| `docs/06_RESEARCH_SOURCES.md` | Sources used while designing the system. |
-
-## System name
-
-**WIGS** — Wallet Intelligence Graph Scanner.
-
-The system is not a basic copy-trader. It is an evidence graph that tries to answer:
-
-> Which wallets predict future token demand, and which token mints have enough confirmation to deserve attention?
+| [`docs/architecture.md`](docs/architecture.md) | System design, full pipeline diagram, repo layout. |
+| [`docs/wallet-engine.md`](docs/wallet-engine.md) | Wallet universe builder, quality scoring model, lead-lag graph. |
+| [`docs/candidate-scoring.md`](docs/candidate-scoring.md) | Candidate detection, enrichment, safety vetoes, social scoring, evidence fusion. |
+| [`docs/data-sources.md`](docs/data-sources.md) | API catalog, free-tier status, MVP priority ranking, raw field specs. |
+| [`docs/data-models.md`](docs/data-models.md) | PostgreSQL ORM tables, indexes, and data retention plan. |
+| [`docs/pseudocode.md`](docs/pseudocode.md) | High-level Python pseudocode for the full system. |
+| [`docs/references.md`](docs/references.md) | Research sources used in system design. |
