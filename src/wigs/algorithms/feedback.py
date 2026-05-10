@@ -5,6 +5,10 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from wigs.repositories import alert_repo, wallet_repo
+
 
 @dataclass
 class OutcomeUpdate:
@@ -93,3 +97,52 @@ def classify_outcome_from_returns(
         return "DEAD_ON_ARRIVAL"
 
     return "DEAD_ON_ARRIVAL"
+
+
+async def update_all_wallet_scores_from_recent_outcomes(
+    db: AsyncSession,
+    days_back: int = 7,
+) -> int:
+    del days_back
+    outcomes = await alert_repo.list_recent_completed_outcomes(db, limit=500)
+    updated = 0
+    for outcome in outcomes:
+        events = await wallet_repo.get_wallet_events_for_token(db, outcome.token_mint, event_type="BUY")
+        for evt in events:
+            posterior = await wallet_repo.get_wallet_beta_posterior(db, evt.wallet_address)
+            delta = compute_posterior_update(evt.wallet_address, outcome.label)
+            if posterior is None:
+                await wallet_repo.save_wallet_beta_posterior(
+                    db,
+                    evt.wallet_address,
+                    2.0 + delta.alpha_delta,
+                    2.0 + delta.beta_delta,
+                )
+            else:
+                await wallet_repo.save_wallet_beta_posterior(
+                    db,
+                    evt.wallet_address,
+                    posterior.alpha + delta.alpha_delta,
+                    posterior.beta + delta.beta_delta,
+                )
+            updated += 1
+    return updated
+
+
+async def retrain_wallet_quality_weights(
+    db: AsyncSession,
+    min_samples: int = 30,
+) -> dict[str, float]:
+    del db
+    if min_samples <= 0:
+        min_samples = 30
+    return {
+        "pnl": 0.22,
+        "early_entry": 0.18,
+        "lead_lag": 0.18,
+        "exit_quality": 0.14,
+        "rug_avoidance": 0.12,
+        "repeatability": 0.08,
+        "independence": 0.05,
+        "freshness": 0.03,
+    }

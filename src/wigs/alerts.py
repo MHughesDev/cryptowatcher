@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wigs.clients import discord, telegram
 from wigs.config import get_settings
-from wigs.models import Alert, CandidateToken, TokenScore
+from wigs.models import CandidateToken, TokenScore
+from wigs.repositories import alert_repo
 
 log = logging.getLogger(__name__)
 settings = get_settings()
@@ -111,11 +112,12 @@ async def publish_alert(
     for channel_str in channels_sent or ["LOG"]:
         channel = channel_str.split("_")[0]  # strip _FAILED suffix for enum
         status = "SENT" if "FAILED" not in channel_str else "FAILED"
-        db.add(Alert(
+        await alert_repo.save_alert(
+            db,
             token_mint=token.token_mint,
             score_id=score.id,
             channel=channel,
             decision=score.decision,
             message=message,
-            delivery_status=status,
-        ))
+            status=status,
+        )

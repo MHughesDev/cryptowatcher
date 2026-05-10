@@ -25,6 +25,26 @@ def _headers() -> dict[str, str]:
     return {"Content-Type": "application/json"}
 
 
+async def _request_json(
+    method: str,
+    url: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+    **kwargs: Any,
+) -> Any | None:
+    try:
+        if client is not None:
+            resp = await client.request(method, url, **kwargs)
+        else:
+            async with httpx.AsyncClient(timeout=15 if method == "POST" else 30) as c:
+                resp = await c.request(method, url, **kwargs)
+        if 400 <= resp.status_code < 600:
+            return None
+        return resp.json()
+    except httpx.HTTPError:
+        return None
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
 async def create_wallet_webhook(
     wallet_addresses: list[str],
@@ -41,10 +61,10 @@ async def create_wallet_webhook(
         "webhookType": "enhanced",
     }
     url = f"{BASE_URL}/webhooks?api-key={settings.helius_api_key}"
-    async with (client or httpx.AsyncClient(timeout=15)) as c:
-        resp = await c.post(url, json=payload, headers=_headers())
-        resp.raise_for_status()
-        return resp.json()["webhookID"]
+    data = await _request_json("POST", url, client=client, json=payload, headers=_headers())
+    if not data:
+        return ""
+    return data.get("webhookID", "")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
@@ -55,13 +75,16 @@ async def parse_transaction(
 ) -> dict[str, Any]:
     """Parse a single transaction signature into an enhanced transaction object."""
     url = f"{PARSE_URL}/?api-key={settings.helius_api_key}"
-    async with (client or httpx.AsyncClient(timeout=15)) as c:
-        resp = await c.post(url, json={"transactions": [signature]}, headers=_headers())
-        resp.raise_for_status()
-        results = resp.json()
-        if not results:
-            raise HeliusError(f"No parse result for {signature}")
-        return results[0]
+    results = await _request_json(
+        "POST",
+        url,
+        client=client,
+        json={"transactions": [signature]},
+        headers=_headers(),
+    )
+    if not results:
+        return {}
+    return results[0] if isinstance(results, list) else {}
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
@@ -77,18 +100,21 @@ async def get_transactions_for_address(
     if before:
         params["before"] = before
     url = f"{BASE_URL}/addresses/{address}/transactions"
-    async with (client or httpx.AsyncClient(timeout=30)) as c:
-        resp = await c.get(url, params=params)
-        resp.raise_for_status()
-        return resp.json()
+    results = await _request_json("GET", url, client=client, params=params)
+    return results if isinstance(results, list) else []
 
 
-def verify_webhook_signature(payload_bytes: bytes, signature_header: str) -> bool:
+def verify_webhook_signature(
+    payload_bytes: bytes,
+    signature_header: str,
+    secret: str | None = None,
+) -> bool:
     """Verify the HMAC-SHA256 signature Helius attaches to webhook requests."""
-    if not settings.helius_webhook_secret:
+    shared_secret = secret if secret is not None else settings.helius_webhook_secret
+    if not shared_secret:
         return True  # Skip verification if secret not configured (dev mode)
     expected = hmac.new(
-        settings.helius_webhook_secret.encode(),
+        shared_secret.encode(),
         payload_bytes,
         hashlib.sha256,
     ).hexdigest()

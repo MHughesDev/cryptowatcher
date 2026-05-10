@@ -14,34 +14,90 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
 from wigs.algorithms.convergence import BuyRecord, ConvergenceResult, compute_convergence_score
 from wigs.algorithms.evidence_fusion import TokenScoreResult, compute_final_score
-from wigs.algorithms.feedback import classify_outcome_from_returns
+from wigs.algorithms.execution_verifier import check_sellability, score_execution
+from wigs.algorithms.history_analyzer import analyze as analyze_history
+from wigs.algorithms.market_verifier import fetch_market_context as fetch_market_context_impl, score_market_context
 from wigs.algorithms.safety_veto import ConcentrationReport, RiskReport, compute_holder_concentration, evaluate
 from wigs.algorithms.social_verifier import SocialScore, fetch_and_score
-from wigs.clients import birdeye, dexscreener, geckoterminal, jupiter, solana_rpc
+from wigs.clients import birdeye, helius, jupiter, solana_rpc
 from wigs.config import get_settings
-from wigs.models import (
-    Alert,
-    CandidateToken,
-    SocialSnapshot,
-    TokenMarketSnapshot,
-    TokenOutcome,
-    TokenRiskSnapshot,
-    TokenScore,
-    WalletEvent,
-)
+from wigs.models import CandidateToken, TrackedWallet, WalletEvent
+from wigs.repositories import graph_repo, token_repo, wallet_repo
 
 log = logging.getLogger(__name__)
 settings = get_settings()
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
+KNOWN_LEGITIMATE_TOKENS = {
+    ("solana", "sol"),
+    ("usd coin", "usdc"),
+    ("tether", "usdt"),
+    ("wrapped sol", "wsol"),
+}
+MALICIOUS_PATTERNS = [
+    re.compile(r"wallet[- ]?connect", re.IGNORECASE),
+    re.compile(r"free\s+mint.*connect wallet", re.IGNORECASE),
+    re.compile(r"(claim|airdrop).*(seed phrase|private key)", re.IGNORECASE),
+    re.compile(r"https?://[^\s]*(drain|airdrop|claim-now|walletbonus)[^\s]*", re.IGNORECASE),
+]
+
+
+class AuditLedger:
+    @staticmethod
+    def record_decision(
+        token_mint: str,
+        decision: str,
+        total_score: int,
+        score_breakdown: dict[str, Any],
+        convergence_wallets: int,
+        triggered_by_wallet: str,
+    ) -> None:
+        logger = structlog.get_logger("audit")
+        logger.info(
+            "decision",
+            token_mint=token_mint,
+            decision=decision,
+            total_score=total_score,
+            convergence_wallets=convergence_wallets,
+            triggered_by_wallet=triggered_by_wallet,
+            **score_breakdown,
+        )
+
+
+def _normalize_token_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, char_a in enumerate(a, start=1):
+        curr = [i]
+        for j, char_b in enumerate(b, start=1):
+            insertions = prev[j] + 1
+            deletions = curr[j - 1] + 1
+            substitutions = prev[j - 1] + (char_a != char_b)
+            curr.append(min(insertions, deletions, substitutions))
+        prev = curr
+    return prev[-1]
 
 
 # ── Domain dataclasses ────────────────────────────────────────────────────────
@@ -141,68 +197,11 @@ def parse_helius_event(payload: dict[str, Any], wallet_address: str) -> ParsedWa
 # ── Market data fetching ──────────────────────────────────────────────────────
 
 async def fetch_market_context(token_mint: str) -> MarketContext:
-    """Fetch and reconcile market data from DexScreener + Birdeye."""
-    dex_task = dexscreener.get_token_pairs(token_mint)
-    bird_task = birdeye.get_token_overview(token_mint)
-
-    dex_pairs, bird_data = await asyncio.gather(dex_task, bird_task, return_exceptions=True)
-    if isinstance(dex_pairs, Exception):
-        dex_pairs = []
-    if isinstance(bird_data, Exception):
-        bird_data = None
-
-    # Use the highest-liquidity pair as primary
-    best_pair: dict[str, Any] = {}
-    if dex_pairs:
-        best_pair = max(dex_pairs, key=lambda p: float(p.get("liquidity", {}).get("usd", 0) or 0))
-
-    liq = float(best_pair.get("liquidity", {}).get("usd", 0) or 0)
-    price = float(best_pair.get("priceUsd", 0) or 0) or None
-    volume = best_pair.get("volume", {})
-
-    # Birdeye enrichment
-    if bird_data:
-        liq = liq or float(bird_data.get("liquidity", 0) or 0)
-        price = price or float(bird_data.get("price", 0) or 0) or None
-
-    return MarketContext(
-        liquidity_usd=liq,
-        price_usd=price,
-        market_cap=float(best_pair.get("marketCap", 0) or 0) or None,
-        fdv=float(best_pair.get("fdv", 0) or 0) or None,
-        volume_5m=float(volume.get("m5", 0) or 0) or None,
-        volume_1h=float(volume.get("h1", 0) or 0) or None,
-        volume_24h=float(volume.get("h24", 0) or 0) or None,
-        buyers_5m=best_pair.get("txns", {}).get("m5", {}).get("buys"),
-        sellers_5m=best_pair.get("txns", {}).get("m5", {}).get("sells"),
-        unique_buyers_5m=None,  # not available from DexScreener free tier
-        avg_trade_size_usd=None,
-        pool_age_minutes=None,   # computed from pool created_at if available
-        primary_pool_address=best_pair.get("pairAddress"),
-        source="dexscreener+birdeye",
-    )
+    return await fetch_market_context_impl(token_mint)
 
 
 def score_market(ctx: MarketContext) -> int:
-    """Compute market_score 0–100 from market context."""
-    # Volume authenticity (unique_buyers / wash-trade proxy)
-    vol_auth = 1.0
-    if ctx.volume_5m and ctx.volume_5m > 0 and ctx.buyers_5m:
-        avg_trade = (ctx.volume_5m / ctx.buyers_5m) if ctx.buyers_5m > 0 else ctx.volume_5m
-        ratio = ctx.buyers_5m / (ctx.volume_5m / max(avg_trade, 1))
-        vol_auth = min(1.0, ratio / 0.2)
-
-    # Liquidity score (log-normalized)
-    import math
-    liq_score = min(1.0, math.log1p(ctx.liquidity_usd) / math.log1p(500_000))
-
-    # Pool maturity
-    maturity = 0.5  # default if unknown
-    if ctx.pool_age_minutes is not None:
-        maturity = min(1.0, ctx.pool_age_minutes / 60)  # 1h = full score
-
-    raw = 0.40 * liq_score + 0.35 * vol_auth + 0.25 * maturity
-    return min(100, max(0, int(raw * 100)))
+    return score_market_context(ctx)
 
 
 # ── Safety enrichment ─────────────────────────────────────────────────────────
@@ -210,12 +209,12 @@ def score_market(ctx: MarketContext) -> int:
 async def fetch_risk_data(
     token_mint: str,
     creator_wallet: str | None,
-) -> tuple[ConcentrationReport, bool, bool, bool, bool, float | None, float | None, bool]:
-    """Returns: concentration, mint_auth, freeze_auth, sell_exists, dev_dump, impact_1sol, impact_5sol, sell_ok"""
+) -> tuple[ConcentrationReport, bool, bool, bool, jupiter.SellabilityReport]:
+    """Returns: concentration, mint_auth, freeze_auth, dev_dump, sell_report"""
     supply_task = solana_rpc.get_token_supply(token_mint)
     holders_task = solana_rpc.get_token_largest_accounts(token_mint)
     bird_sec_task = birdeye.get_token_security(token_mint)
-    sell_task = jupiter.estimate_sellability(token_mint)
+    sell_task = check_sellability(token_mint)
 
     supply, holders, bird_sec, sell_report = await asyncio.gather(
         supply_task, holders_task, bird_sec_task, sell_task, return_exceptions=True
@@ -237,73 +236,31 @@ async def fetch_risk_data(
             price_impact_1_sol=None, price_impact_5_sol=None, all_quotes_succeeded=False
         )
 
-    return (
-        concentration,
-        mint_auth,
-        freeze_auth,
-        sell_report.route_exists,
-        False,  # dev_dump — requires creator wallet tx analysis (Phase 2 feature)
-        sell_report.price_impact_1_sol,
-        sell_report.price_impact_5_sol,
-        sell_report.all_quotes_succeeded,
-    )
+    return (concentration, mint_auth, freeze_auth, False, sell_report)
 
 
 # ── Convergence loading ───────────────────────────────────────────────────────
 
 async def load_convergence_buyers(token_mint: str, db: AsyncSession) -> list[BuyRecord]:
     """Load all tracked wallet buy records for this token from the DB."""
-    from sqlalchemy import select, text
-    from wigs.models import WalletClusterMember, WalletScoreSnapshot
-
-    # Get all buy events for this token
-    stmt = select(WalletEvent).where(
-        WalletEvent.token_mint == token_mint,
-        WalletEvent.event_type == "BUY",
-    )
-    result = await db.execute(stmt)
-    events = result.scalars().all()
+    events = await wallet_repo.get_wallet_events_for_token(db, token_mint, event_type="BUY")
 
     buy_records: list[BuyRecord] = []
     for evt in events:
-        # Get wallet quality score
-        score_stmt = (
-            select(WalletScoreSnapshot)
-            .where(WalletScoreSnapshot.wallet_address == evt.wallet_address)
-            .order_by(WalletScoreSnapshot.captured_at.desc())
-            .limit(1)
-        )
-        score_result = await db.execute(score_stmt)
-        score = score_result.scalar_one_or_none()
+        score = await wallet_repo.get_wallet_score(db, evt.wallet_address)
         quality = score.wallet_quality if score else 50
 
-        # Get cluster membership
-        cluster_stmt = select(WalletClusterMember).where(
-            WalletClusterMember.wallet_address == evt.wallet_address
-        )
-        cluster_result = await db.execute(cluster_stmt)
-        membership = cluster_result.scalar_one_or_none()
+        membership = await graph_repo.get_wallet_cluster_member(db, evt.wallet_address)
 
         cluster_id = str(membership.cluster_id) if membership else None
         cluster_type = None
         cluster_size = 1
 
         if membership:
-            from sqlalchemy import func as sqlfunc
-            from wigs.models import WalletCluster
-            cluster_info_stmt = select(WalletCluster).where(
-                WalletCluster.id == membership.cluster_id
-            )
-            cluster_result2 = await db.execute(cluster_info_stmt)
-            cluster_obj = cluster_result2.scalar_one_or_none()
+            cluster_obj = await graph_repo.get_wallet_cluster(db, evt.wallet_address)
             if cluster_obj:
                 cluster_type = cluster_obj.cluster_type
-                # Count cluster members
-                count_stmt = select(WalletClusterMember).where(
-                    WalletClusterMember.cluster_id == membership.cluster_id
-                )
-                count_result = await db.execute(count_stmt)
-                cluster_size = len(count_result.scalars().all())
+                cluster_size = await graph_repo.get_cluster_member_count(db, membership.cluster_id)
 
         buy_records.append(BuyRecord(
             wallet_address=evt.wallet_address,
@@ -315,6 +272,64 @@ async def load_convergence_buyers(token_mint: str, db: AsyncSession) -> list[Buy
         ))
 
     return buy_records
+
+
+async def detect_kol_already_called(token_mint: str, db: AsyncSession) -> bool:
+    stmt = (
+        select(func.count())
+        .select_from(WalletEvent)
+        .join(TrackedWallet, TrackedWallet.wallet_address == WalletEvent.wallet_address)
+        .where(
+            WalletEvent.token_mint == token_mint,
+            WalletEvent.event_type == "BUY",
+            TrackedWallet.wallet_type == "KOL_PRECALL",
+        )
+    )
+    result = await db.execute(stmt)
+    return bool(result.scalar_one())
+
+
+async def is_copycat_mint(symbol: str | None, name: str | None, db: AsyncSession) -> bool:
+    normalized_symbol = _normalize_token_text(symbol)
+    normalized_name = _normalize_token_text(name)
+    if not normalized_symbol and not normalized_name:
+        return False
+    if ((name or "").lower(), (symbol or "").lower()) in KNOWN_LEGITIMATE_TOKENS:
+        return False
+
+    stmt = select(CandidateToken.symbol, CandidateToken.name)
+    result = await db.execute(stmt)
+    for existing_symbol, existing_name in result.all():
+        existing_symbol_norm = _normalize_token_text(existing_symbol)
+        existing_name_norm = _normalize_token_text(existing_name)
+        if normalized_symbol and existing_symbol_norm:
+            if 0 < _levenshtein(normalized_symbol, existing_symbol_norm) < 2:
+                return True
+        if normalized_name and existing_name_norm:
+            if 0 < _levenshtein(normalized_name, existing_name_norm) < 2:
+                return True
+    return False
+
+
+async def has_social_drainer_link(social_posts: list[Any]) -> bool:
+    for post in social_posts:
+        if isinstance(post, dict):
+            text = " ".join(str(post.get(key, "")) for key in ("text", "content", "title"))
+        else:
+            text = str(post)
+        for pattern in MALICIOUS_PATTERNS:
+            if pattern.search(text):
+                return True
+    return False
+
+
+async def update_candidate_relationships(
+    token_mint: str,
+    wallet_address: str,
+    event_time: datetime,
+    db: AsyncSession,
+) -> None:
+    await graph_repo.add_wallet_token_edge(db, wallet_address, token_mint, event_time)
 
 
 # ── Main orchestration ────────────────────────────────────────────────────────
@@ -333,34 +348,18 @@ async def handle_wallet_event(
         return None
 
     # ── 1. Persist the wallet event ──────────────────────────────────────
-    db_event = WalletEvent(
-        wallet_address=event.wallet_address,
-        tx_signature=event.tx_signature,
-        token_mint=event.token_mint,
-        event_type=event.event_type,
-        amount_sol=event.amount_sol,
-        amount_usd=event.amount_usd,
-        amount_token=event.amount_token,
-        dex_or_program=event.dex_or_program,
-        pool_address=event.pool_address,
-        event_time=event.event_time,
-        raw_payload=event.raw_payload,
-    )
-    db.add(db_event)
+    existing_event = await wallet_repo.get_wallet_event_by_signature(db, event.tx_signature)
+    if existing_event is not None:
+        return None
+    await wallet_repo.save_wallet_event(db, event)
 
     # ── 2. Upsert candidate token ────────────────────────────────────────
-    from sqlalchemy import select
-    existing = await db.execute(
-        select(CandidateToken).where(CandidateToken.token_mint == event.token_mint)
+    candidate = await token_repo.upsert_candidate_token(
+        db,
+        event.token_mint,
+        first_seen_at=datetime.utcnow(),
+        status="ENRICHING",
     )
-    candidate = existing.scalar_one_or_none()
-    if candidate is None:
-        candidate = CandidateToken(
-            token_mint=event.token_mint,
-            first_seen_at=datetime.utcnow(),
-            status="ENRICHING",
-        )
-        db.add(candidate)
 
     await db.flush()  # get IDs without committing
 
@@ -392,11 +391,24 @@ async def handle_wallet_event(
         from wigs.algorithms.safety_veto import ConcentrationReport
         risk_data = (
             ConcentrationReport(gini=0, hhi=0, top_10_pct=0, top_20_pct=0, holder_count=0),
-            None, None, False, False, None, None, False
+            None, None, False,
+            jupiter.SellabilityReport(
+                route_exists=False,
+                price_impact_025_sol=None,
+                price_impact_1_sol=None,
+                price_impact_5_sol=None,
+                all_quotes_succeeded=False,
+            ),
         )
 
-    (concentration, mint_auth, freeze_auth, sell_exists,
-     dev_dump, impact_1sol, impact_5sol, sell_ok) = risk_data
+    concentration, mint_auth, freeze_auth, dev_dump, sell_report = risk_data
+    sell_exists = sell_report.route_exists
+    impact_025sol = sell_report.price_impact_025_sol
+    impact_1sol = sell_report.price_impact_1_sol
+    impact_5sol = sell_report.price_impact_5_sol
+    kol_already_called = await detect_kol_already_called(event.token_mint, db)
+    copycat_mint = await is_copycat_mint(candidate.symbol, candidate.name, db)
+    social_drainer_link = await has_social_drainer_link(social_score.evidence.all_texts)
 
     # ── 5. Safety veto evaluation ────────────────────────────────────────
     vol_auth_ratio = None
@@ -416,10 +428,10 @@ async def handle_wallet_event(
         has_social_data=social_score.value > 0,
         independent_buyer_count=convergence.independent_buyer_count,
         cluster_is_independent=convergence.independent_buyer_count > 0,
-        kol_already_called=False,    # TODO: implement KOL call detection
+        kol_already_called=kol_already_called,
         dev_dump_detected=dev_dump,
-        copycat_mint=False,          # TODO: implement copycat detection
-        social_drainer_link=False,   # TODO: implement link scanning
+        copycat_mint=copycat_mint,
+        social_drainer_link=social_drainer_link,
     )
 
     # ── 6. Score components ──────────────────────────────────────────────
@@ -428,11 +440,15 @@ async def handle_wallet_event(
         0.70 * convergence.convergence_score
         + 0.30 * (buyers[0].wallet_quality if buyers else 50)
     ))
-    history_score = 50   # TODO: implement history analyzer
-    execution_score = sell_ok and not risk_report.has_hard_veto() and (
-        (impact_1sol or 1.0) < settings.max_price_impact_1_sol
+    history_score = await analyze_history(
+        event.token_mint,
+        candidate.creator_wallet,
+        market_ctx.pool_age_minutes or 0.0,
+        db,
+        solana_rpc,
+        helius,
     )
-    execution_score_int = 100 if execution_score else 30
+    execution_score_int = score_execution(sell_report, settings.max_price_impact_1_sol)
 
     # ── 7. Evidence fusion ───────────────────────────────────────────────
     result = compute_final_score(
@@ -446,63 +462,23 @@ async def handle_wallet_event(
     )
 
     # ── 8. Persist snapshots and score ───────────────────────────────────
-    db.add(TokenMarketSnapshot(
-        token_mint=event.token_mint,
-        liquidity_usd=market_ctx.liquidity_usd,
-        price_usd=market_ctx.price_usd,
-        market_cap=market_ctx.market_cap,
-        fdv=market_ctx.fdv,
-        volume_5m=market_ctx.volume_5m,
-        volume_1h=market_ctx.volume_1h,
-        volume_24h=market_ctx.volume_24h,
-        buyers_5m=market_ctx.buyers_5m,
-        sellers_5m=market_ctx.sellers_5m,
-        source=market_ctx.source,
-    ))
-    db.add(TokenRiskSnapshot(
-        token_mint=event.token_mint,
+    await token_repo.save_market_snapshot(db, event.token_mint, market_ctx)
+    await token_repo.save_risk_snapshot(
+        db,
+        event.token_mint,
+        risk_report,
+        concentration,
         mint_authority_active=mint_auth,
         freeze_authority_active=freeze_auth,
-        top_10_holder_pct=concentration.top_10_pct,
-        top_20_holder_pct=concentration.top_20_pct,
-        gini_coefficient=concentration.gini,
-        hhi=concentration.hhi,
         sell_quote_exists=sell_exists,
+        price_impact_025_sol=impact_025sol,
         price_impact_1_sol=impact_1sol,
         price_impact_5_sol=impact_5sol,
-        risk_flags=result.score_reasons.get("vetoes", []),
-        risk_score=result.risk_score,
-    ))
-    db.add(SocialSnapshot(
-        token_mint=event.token_mint,
-        reddit_mentions=social_score.evidence.reddit_mentions,
-        telegram_mentions=social_score.evidence.telegram_mentions,
-        discord_mentions=social_score.evidence.discord_mentions,
-        youtube_mentions=social_score.evidence.youtube_mentions,
-        gdelt_mentions=social_score.evidence.gdelt_mentions,
-        unique_sources=social_score.evidence.unique_sources,
-        velocity_acceleration=social_score.evidence.velocity_acceleration,
-        novelty_score=social_score.evidence.novelty_score,
-        social_score=social_score.value,
-    ))
-
-    token_score = TokenScore(
-        token_mint=event.token_mint,
-        wallet_score=result.wallet_score,
-        market_score=result.market_score,
-        risk_score=result.risk_score,
-        social_score=result.social_score,
-        history_score=result.history_score,
-        execution_score=result.execution_score,
-        total_score=result.total_score,
-        decision=result.decision,
-        risk_level=result.risk_level,
-        convergence_independent_count=result.convergence_independent_count,
-        convergence_time_spread_s=result.convergence_time_spread_s,
-        threshold_adjustment=result.threshold_adjustment,
-        score_reasons=result.score_reasons,
     )
-    db.add(token_score)
+    await token_repo.save_social_snapshot(db, event.token_mint, social_score)
+
+    token_score = await token_repo.save_token_score(db, result, event.token_mint)
+    await update_candidate_relationships(event.token_mint, event.wallet_address, event.event_time, db)
 
     # Update candidate status
     candidate.status = result.decision if result.decision != "AVOID" else "REJECTED"
@@ -520,6 +496,21 @@ async def handle_wallet_event(
         result.total_score,
         convergence.independent_buyer_count,
         convergence.time_spread_seconds,
+    )
+    AuditLedger.record_decision(
+        token_mint=event.token_mint,
+        decision=result.decision,
+        total_score=result.total_score,
+        score_breakdown={
+            "wallet_score": result.wallet_score,
+            "market_score": result.market_score,
+            "risk_score": result.risk_score,
+            "social_score": result.social_score,
+            "history_score": result.history_score,
+            "execution_score": result.execution_score,
+        },
+        convergence_wallets=convergence.independent_buyer_count,
+        triggered_by_wallet=event.wallet_address,
     )
 
     return result
