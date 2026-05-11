@@ -29,6 +29,8 @@ from .token_repo import (
     upsert_candidate_token,
 )
 from .wallet_repo import (
+    claim_wallet_outcome_application,
+    has_wallet_outcome_application,
     get_recent_wallet_events,
     get_tracked_wallet,
     get_wallet_beta_posterior,
@@ -36,6 +38,7 @@ from .wallet_repo import (
     get_wallet_events_for_token,
     get_wallet_score,
     list_active_wallets,
+    save_wallet_outcome_application,
     save_wallet_beta_posterior,
     save_wallet_event,
     save_wallet_score,
@@ -45,6 +48,7 @@ from .wallet_repo import (
 __all__ = [
     "add_wallet_token_edge",
     "add_wallet_wallet_edge",
+    "claim_wallet_outcome_application",
     "get_candidate_token",
     "get_cluster_member_count",
     "get_cluster_members",
@@ -52,6 +56,7 @@ __all__ = [
     "get_latest_token_context",
     "get_latest_token_score",
     "get_outcome_for_alert",
+    "has_wallet_outcome_application",
     "get_recent_wallet_events",
     "get_tracked_wallet",
     "get_wallet_beta_posterior",
@@ -73,6 +78,7 @@ __all__ = [
     "save_risk_snapshot",
     "save_social_snapshot",
     "save_token_score",
+    "save_wallet_outcome_application",
     "save_wallet_beta_posterior",
     "save_wallet_event",
     "save_wallet_score",

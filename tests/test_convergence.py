@@ -63,3 +63,13 @@ def test_empty_buyers():
     assert result.convergence_score == 0
     assert result.independent_buyer_count == 0
     assert result.threshold_adjustment == 0
+
+
+def test_trust_multiplier_influences_weighted_sum():
+    now = datetime.utcnow()
+    buyers = [
+        BuyRecord("w1", 80, now - timedelta(seconds=20), None, None, trust_multiplier=0.7),
+        BuyRecord("w2", 80, now - timedelta(seconds=20), None, None, trust_multiplier=1.3),
+    ]
+    result = compute_convergence_score(buyers, now=now)
+    assert result.weighted_sum > 0

@@ -1,4 +1,16 @@
 services:
+  migrate:
+    build: .
+    command: alembic upgrade head
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://wigs:wigs@postgres:5432/wigs
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   app:
     build: .
     ports:
@@ -8,6 +20,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://wigs:wigs@postgres:5432/wigs
       REDIS_URL: redis://redis:6379/0
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -24,6 +38,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://wigs:wigs@postgres:5432/wigs
       REDIS_URL: redis://redis:6379/0
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

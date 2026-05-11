@@ -1,9 +1,13 @@
 """Tests for Thompson Sampling feedback loop."""
 
+import asyncio
+from types import SimpleNamespace
+
 from wigs.algorithms.feedback import (
     classify_outcome_from_returns,
     compute_posterior_update,
     sample_wallet_trust,
+    update_all_wallet_scores_from_recent_outcomes,
 )
 
 
@@ -64,3 +68,45 @@ def test_classify_tradeable_runner():
         initial_liquidity=8_000,
     )
     assert label == "TRADEABLE_RUNNER"
+
+
+def test_update_all_wallet_scores_from_recent_outcomes_is_idempotent(monkeypatch):
+    outcomes = [SimpleNamespace(id="outcome-1", token_mint="mint-1", label="TRADEABLE_RUNNER")]
+    events = [SimpleNamespace(wallet_address="wallet-A")]
+    claimed: set[tuple[str, str]] = set()
+    saved = []
+
+    async def fake_list_recent_completed_outcomes(_db, limit=500):
+        return outcomes
+
+    async def fake_get_wallet_events_for_token(_db, token_mint, event_type="BUY"):
+        assert token_mint == "mint-1"
+        return events
+
+    async def fake_claim_wallet_outcome_application(_db, wallet_address, token_outcome_id, token_mint):
+        del token_mint
+        key = (wallet_address, token_outcome_id)
+        if key in claimed:
+            return False
+        claimed.add(key)
+        return True
+
+    async def fake_get_wallet_beta_posterior(_db, address):
+        return None
+
+    async def fake_save_wallet_beta_posterior(_db, address, alpha, beta):
+        saved.append((address, alpha, beta))
+        return SimpleNamespace(wallet_address=address, alpha=alpha, beta=beta)
+
+    monkeypatch.setattr("wigs.algorithms.feedback.alert_repo.list_recent_completed_outcomes", fake_list_recent_completed_outcomes)
+    monkeypatch.setattr("wigs.algorithms.feedback.wallet_repo.get_wallet_events_for_token", fake_get_wallet_events_for_token)
+    monkeypatch.setattr("wigs.algorithms.feedback.wallet_repo.claim_wallet_outcome_application", fake_claim_wallet_outcome_application)
+    monkeypatch.setattr("wigs.algorithms.feedback.wallet_repo.get_wallet_beta_posterior", fake_get_wallet_beta_posterior)
+    monkeypatch.setattr("wigs.algorithms.feedback.wallet_repo.save_wallet_beta_posterior", fake_save_wallet_beta_posterior)
+
+    first = asyncio.run(update_all_wallet_scores_from_recent_outcomes(db=object()))
+    second = asyncio.run(update_all_wallet_scores_from_recent_outcomes(db=object()))
+
+    assert first == 1
+    assert second == 0
+    assert saved == [("wallet-A", 3.0, 2.0)]

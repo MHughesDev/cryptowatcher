@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from wigs.config import get_settings
 from wigs.repositories import wallet_repo
+
+settings = get_settings()
 
 
 def _extract_wallet_from_trade(trade: dict[str, Any]) -> str | None:
@@ -75,7 +78,9 @@ async def discover_kol_precall_wallets(
     helius_client,
     lookback_hours: int = 6,
 ) -> list[str]:
-    wallets: set[str] = set()
+    lead_counts: dict[str, int] = {}
+    excluded_wallets = set(kol_wallet_addresses) | set(settings.kol_precall_wallet_blocklist)
+    infra_prefixes = ("jup", "raydium", "orca", "meteora", "pump")
     for kol_wallet in kol_wallet_addresses:
         kol_trades = await helius_client.get_transactions_for_address(kol_wallet, limit=100)
         for kol_trade in kol_trades:
@@ -88,8 +93,21 @@ async def discover_kol_precall_wallets(
             for trade in prior_trades:
                 trade_time = _extract_time(trade)
                 wallet = _extract_wallet_from_trade(trade)
-                if wallet and trade_time and lower_bound <= trade_time < kol_time:
-                    wallets.add(wallet)
+                if not wallet or not trade_time:
+                    continue
+                if wallet in excluded_wallets:
+                    continue
+                if wallet.lower().startswith(infra_prefixes):
+                    continue
+                lead_seconds = (kol_time - trade_time).total_seconds()
+                if lead_seconds < settings.kol_precall_min_lead_seconds:
+                    continue
+                if lead_seconds > settings.kol_precall_max_lead_seconds:
+                    continue
+                if lower_bound <= trade_time < kol_time:
+                    lead_counts[wallet] = lead_counts.get(wallet, 0) + 1
+    min_hits = max(1, settings.kol_precall_min_hits)
+    wallets = [wallet for wallet, hits in lead_counts.items() if hits >= min_hits]
     return sorted(wallets)
 
 

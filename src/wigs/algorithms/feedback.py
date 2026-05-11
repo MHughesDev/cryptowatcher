@@ -58,6 +58,28 @@ def should_increase_trust(alpha: float, beta: float) -> bool:
     return sample_wallet_trust(alpha, beta) > 0.6
 
 
+def posterior_expected_trust(alpha: float, beta: float) -> float:
+    """Expected value E[Beta(alpha, beta)] used for deterministic weighting."""
+    a = max(0.01, alpha)
+    b = max(0.01, beta)
+    return a / (a + b)
+
+
+def posterior_trust_multiplier(
+    alpha: float,
+    beta: float,
+    *,
+    min_multiplier: float,
+    max_multiplier: float,
+) -> float:
+    """
+    Map expected trust from [0, 1] to a bounded multiplier range.
+    0.5 confidence maps to midpoint of [min, max].
+    """
+    expected = posterior_expected_trust(alpha, beta)
+    return min_multiplier + expected * (max_multiplier - min_multiplier)
+
+
 def classify_outcome_from_returns(
     tradable_return_1h: float | None,
     max_return_24h: float | None,
@@ -109,6 +131,14 @@ async def update_all_wallet_scores_from_recent_outcomes(
     for outcome in outcomes:
         events = await wallet_repo.get_wallet_events_for_token(db, outcome.token_mint, event_type="BUY")
         for evt in events:
+            claimed = await wallet_repo.claim_wallet_outcome_application(
+                db,
+                evt.wallet_address,
+                outcome.id,
+                outcome.token_mint,
+            )
+            if not claimed:
+                continue
             posterior = await wallet_repo.get_wallet_beta_posterior(db, evt.wallet_address)
             delta = compute_posterior_update(evt.wallet_address, outcome.label)
             if posterior is None:

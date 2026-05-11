@@ -16,12 +16,16 @@ Find **watchlist-grade Solana memecoins** by combining:
 
 ## Output
 
+Canonical API enum values:
+
 ```text
 AVOID
 WATCH
-STRONG WATCH
-STRONG CANDIDATE
+STRONG_WATCH
+STRONG_CANDIDATE
 ```
+
+Display labels may be presented with spaces (for example, `STRONG WATCH`) in human-facing UIs/messages.
 
 This is an alert and ranking engine, not an auto-trader. No positions are opened automatically.
 
@@ -36,3 +40,6 @@ This is an alert and ranking engine, not an auto-trader. No positions are opened
 | [`docs/data-models.md`](docs/data-models.md) | PostgreSQL ORM tables, indexes, and data retention plan. |
 | [`docs/pseudocode.md`](docs/pseudocode.md) | High-level Python pseudocode for the full system. |
 | [`docs/references.md`](docs/references.md) | Research sources used in system design. |
+| [`docs/runbook-staging.md`](docs/runbook-staging.md) | Staging bootstrap, migration, startup, webhook, smoke flow. |
+| [`docs/runbook-prod.md`](docs/runbook-prod.md) | Production deployment and rollback checklist. |
+| [`docs/production-readiness-checklist.md`](docs/production-readiness-checklist.md) | Production readiness gate and verification commands. |

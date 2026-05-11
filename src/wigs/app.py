@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wigs.config import get_settings
 from wigs.database import get_db
+from wigs.decision_labels import to_display_label
 from wigs.models import Alert, CandidateToken, TokenScore, TrackedWallet, WalletScoreSnapshot
+from wigs.observability import metrics
 from wigs.pipeline import handle_wallet_event
 
 log = logging.getLogger(__name__)
@@ -34,6 +36,12 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/metrics/system")
+async def system_metrics() -> dict[str, dict[str, float]]:
+    """Internal observability snapshot for counters/gauges."""
+    return metrics.snapshot()
+
+
 # ── Helius webhook receiver ───────────────────────────────────────────────────
 
 @app.post("/webhook/helius")
@@ -42,6 +50,7 @@ async def helius_webhook(
     db: Annotated[AsyncSession, Depends(get_db)],
     x_helius_signature: str | None = Header(default=None),
 ) -> JSONResponse:
+    metrics.incr("webhook_received_requests")
     body = await request.body()
 
     # Verify HMAC signature
@@ -61,6 +70,8 @@ async def helius_webhook(
         payload = [payload]
 
     processed = 0
+    skipped_no_wallet = 0
+    skipped_untracked = 0
     for event in payload:
         # Identify which tracked wallet triggered this event
         account_data = event.get("accountData", [])
@@ -71,6 +82,7 @@ async def helius_webhook(
                 break
 
         if not wallet_address:
+            skipped_no_wallet += 1
             continue
 
         # Only process events from tracked wallets
@@ -81,11 +93,16 @@ async def helius_webhook(
             )
         )
         if not tracked.scalar_one_or_none():
+            skipped_untracked += 1
             continue
 
         result = await handle_wallet_event(event, wallet_address, db)
         if result:
             processed += 1
+
+    metrics.incr("webhook_events_processed", processed)
+    metrics.incr("webhook_events_skipped_no_wallet", skipped_no_wallet)
+    metrics.incr("webhook_events_skipped_untracked", skipped_untracked)
 
     return JSONResponse({"processed": processed})
 
@@ -120,6 +137,7 @@ async def list_candidates(
             "score": {
                 "total": score.total_score if score else None,
                 "decision": score.decision if score else None,
+                "decision_display": to_display_label(score.decision) if score else None,
                 "wallet": score.wallet_score if score else None,
                 "market": score.market_score if score else None,
                 "risk": score.risk_score if score else None,
@@ -163,6 +181,7 @@ async def get_candidate(
         "score": {
             "total": score.total_score,
             "decision": score.decision,
+            "decision_display": to_display_label(score.decision),
             "risk_level": score.risk_level,
             "wallet": score.wallet_score,
             "market": score.market_score,
