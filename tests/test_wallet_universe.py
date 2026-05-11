@@ -74,3 +74,47 @@ async def test_build_seed_wallet_set_persists_candidates(monkeypatch):
 
     assert set(wallets) == {"w1", "w2"}
     assert all(source == "seed_builder" for _, source, _ in persisted)
+
+
+@pytest.mark.asyncio
+async def test_discover_kol_precall_wallets_requires_repeated_leads(monkeypatch):
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_min_hits", 2)
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_wallet_blocklist", [])
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_min_lead_seconds", 60)
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_max_lead_seconds", 21_600)
+
+    helius = FakeHeliusClient(
+        {
+            "kol1": [
+                {"token_mint": "mintA", "blockTime": 1_700_001_000},
+                {"token_mint": "mintB", "blockTime": 1_700_002_000},
+            ],
+            "mintA": [{"owner": "lead1", "blockTime": 1_700_000_800}],
+            "mintB": [{"owner": "lead1", "blockTime": 1_700_001_800}],
+        }
+    )
+
+    wallets = await wallet_universe.discover_kol_precall_wallets(["kol1"], helius)
+    assert wallets == ["lead1"]
+
+
+@pytest.mark.asyncio
+async def test_discover_kol_precall_wallets_filters_blocklist_and_infra(monkeypatch):
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_min_hits", 1)
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_wallet_blocklist", ["blocked1"])
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_min_lead_seconds", 60)
+    monkeypatch.setattr(wallet_universe.settings, "kol_precall_max_lead_seconds", 21_600)
+
+    helius = FakeHeliusClient(
+        {
+            "kol1": [{"token_mint": "mintA", "blockTime": 1_700_001_000}],
+            "mintA": [
+                {"owner": "blocked1", "blockTime": 1_700_000_800},
+                {"owner": "jup-router", "blockTime": 1_700_000_790},
+                {"owner": "good1", "blockTime": 1_700_000_780},
+            ],
+        }
+    )
+
+    wallets = await wallet_universe.discover_kol_precall_wallets(["kol1"], helius)
+    assert wallets == ["good1"]

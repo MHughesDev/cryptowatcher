@@ -41,7 +41,7 @@ def test_build_scheduler_registers_phase8_jobs():
         "label_outcomes",
         "update_posteriors",
         "update_wallet_scores",
-        "refresh_wallets",
+        "discover_new_wallets",
         "rebuild_clusters",
         "retrain_wallet_quality_weights",
         "run_backtest",
@@ -86,6 +86,7 @@ async def test_label_alert_outcomes_uses_dexscreener_liquidity(monkeypatch):
 async def test_refresh_tracked_wallet_set_scores_discovered_wallets(monkeypatch):
     db = _FakeDB()
     saved_scores = []
+    upserted = []
     active_wallets = [SimpleNamespace(wallet_address="kol-1", wallet_type="KOL_PRECALL")]
     outcomes = [SimpleNamespace(token_mint="winner-1", label="HEAVY_HITTER")]
     events = [SimpleNamespace(token_mint="winner-1", amount_usd=150.0)]
@@ -107,6 +108,14 @@ async def test_refresh_tracked_wallet_set_scores_discovered_wallets(monkeypatch)
         assert wallet_address == "new-wallet"
         return events
 
+    async def fake_get_tracked_wallet(_db, wallet_address):
+        assert wallet_address == "new-wallet"
+        return None
+
+    async def fake_upsert_tracked_wallet(_db, address, label=None, *, source="manual", wallet_type="UNKNOWN"):
+        upserted.append((address, source, wallet_type))
+        return SimpleNamespace(wallet_address=address, wallet_type=wallet_type, is_active=True)
+
     async def fake_save_wallet_score(_db, wallet_address, scores):
         saved_scores.append((wallet_address, scores["wallet_quality"]))
         return SimpleNamespace(wallet_address=wallet_address)
@@ -115,10 +124,13 @@ async def test_refresh_tracked_wallet_set_scores_discovered_wallets(monkeypatch)
     monkeypatch.setattr(workers.wallet_repo, "list_active_wallets", fake_wallets)
     monkeypatch.setattr(workers.wallet_universe, "build_seed_wallet_set", fake_build_seed_wallet_set)
     monkeypatch.setattr(workers.wallet_repo, "get_recent_wallet_events", fake_recent_events)
+    monkeypatch.setattr(workers.wallet_repo, "get_tracked_wallet", fake_get_tracked_wallet)
+    monkeypatch.setattr(workers.wallet_repo, "upsert_tracked_wallet", fake_upsert_tracked_wallet)
     monkeypatch.setattr(workers.wallet_repo, "save_wallet_score", fake_save_wallet_score)
 
     await workers.refresh_tracked_wallet_set()
 
+    assert upserted == [("new-wallet", "seed_builder", "SCOUT")]
     assert saved_scores
     assert saved_scores[0][0] == "new-wallet"
     assert db.commits == 1

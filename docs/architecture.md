@@ -54,8 +54,8 @@ That feedback loop is the main edge. A wallet is not "good" because it once boug
                       ↓
 ┌──────────────────────────────────────────┐
 │ 8. Evidence Fusion Scorer                │
-│ Produces AVOID / WATCH / STRONG WATCH    │
-│ / STRONG CANDIDATE                       │
+│ Produces AVOID / WATCH / STRONG_WATCH    │
+│ / STRONG_CANDIDATE (API enums)           │
 └─────────────────────┬────────────────────┘
                       ↓
 ┌──────────────────────────────────────────┐

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     telegram_alert_chat_id: str = ""
 
     discord_alert_webhook_url: str = ""
+    slack_alert_webhook_url: str = ""
 
     youtube_api_key: str = ""
 
@@ -62,9 +63,19 @@ class Settings(BaseSettings):
     # ── Feature flags ─────────────────────────────────────────────────────────
     enable_telegram_alerts: bool = True
     enable_discord_alerts: bool = True
+    enable_slack_alerts: bool = False
+    slack_min_convergence_wallets: int = 2
     enable_social_scoring: bool = True
     enable_gdelt: bool = True
     enable_youtube: bool = True
+    enable_posterior_trust_weighting: bool = False
+    enable_posterior_trust_shadow_logging: bool = True
+    posterior_trust_min_multiplier: float = 0.7
+    posterior_trust_max_multiplier: float = 1.3
+    kol_precall_min_hits: int = 2
+    kol_precall_min_lead_seconds: int = 60
+    kol_precall_max_lead_seconds: int = 21600
+    kol_precall_wallet_blocklist: list[str] = Field(default_factory=list)
 
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property

@@ -7,8 +7,9 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wigs.clients import discord, telegram
+from wigs.clients import discord, slack, telegram
 from wigs.config import get_settings
+from wigs.decision_labels import to_display_label
 from wigs.models import CandidateToken, TokenScore
 from wigs.repositories import alert_repo
 
@@ -33,6 +34,15 @@ RISK_EMOJI = {
 }
 
 
+
+
+def _to_plain_text(message: str) -> str:
+    """Convert HTML-ish alert text into channel-safe plain text."""
+    return (message
+            .replace("<b>", "*").replace("</b>", "*")
+            .replace("<i>", "_").replace("</i>", "_")
+            .replace("<code>", "`").replace("</code>", "`")
+            .replace("<a href='", "").replace("'>", " ").replace("</a>", ""))
 def format_alert_message(token: CandidateToken, score: TokenScore) -> str:
     name_str = f"{token.name} ({token.symbol})" if token.name and token.symbol else (token.name or token.symbol or "Unknown")
     decision_emoji = DECISION_EMOJI.get(score.decision, "")
@@ -55,7 +65,7 @@ def format_alert_message(token: CandidateToken, score: TokenScore) -> str:
     penalty_str = ", ".join(penalties) if penalties else "None"
 
     lines = [
-        f"{decision_emoji} <b>WIGS Alert — {score.decision}</b>",
+        f"{decision_emoji} <b>WIGS Alert — {to_display_label(score.decision)}</b>",
         "",
         f"<b>{name_str}</b>",
         f"  Mint: <code>{token.token_mint}</code>",
@@ -100,13 +110,24 @@ async def publish_alert(
 
     if settings.enable_discord_alerts and settings.discord_alert_webhook_url:
         # Discord doesn't support HTML — strip tags
-        plain = (message
-                 .replace("<b>", "**").replace("</b>", "**")
-                 .replace("<i>", "_").replace("</i>", "_")
-                 .replace("<code>", "`").replace("</code>", "`")
-                 .replace("<a href='", "").replace("'>", " ").replace("</a>", ""))
+        plain = _to_plain_text(message)
         ok = await discord.send_webhook(plain)
         channels_sent.append("DISCORD" if ok else "DISCORD_FAILED")
+
+
+
+    if settings.enable_slack_alerts and settings.slack_alert_webhook_url:
+        if score.convergence_independent_count >= settings.slack_min_convergence_wallets:
+            plain = _to_plain_text(message)
+            ok = await slack.send_webhook(plain)
+            channels_sent.append("SLACK" if ok else "SLACK_FAILED")
+        else:
+            log.info(
+                "Slack alert skipped for %s: convergence=%d below min=%d",
+                token.token_mint,
+                score.convergence_independent_count,
+                settings.slack_min_convergence_wallets,
+            )
 
     # Persist one alert row per channel
     for channel_str in channels_sent or ["LOG"]:

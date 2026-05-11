@@ -26,6 +26,7 @@ import structlog
 from wigs.algorithms.convergence import BuyRecord, ConvergenceResult, compute_convergence_score
 from wigs.algorithms.evidence_fusion import TokenScoreResult, compute_final_score
 from wigs.algorithms.execution_verifier import check_sellability, score_execution
+from wigs.algorithms.feedback import posterior_trust_multiplier
 from wigs.algorithms.history_analyzer import analyze as analyze_history
 from wigs.algorithms.market_verifier import fetch_market_context as fetch_market_context_impl, score_market_context
 from wigs.algorithms.safety_veto import ConcentrationReport, RiskReport, compute_holder_concentration, evaluate
@@ -249,6 +250,17 @@ async def load_convergence_buyers(token_mint: str, db: AsyncSession) -> list[Buy
     for evt in events:
         score = await wallet_repo.get_wallet_score(db, evt.wallet_address)
         quality = score.wallet_quality if score else 50
+        posterior = await wallet_repo.get_wallet_beta_posterior(db, evt.wallet_address)
+        trust_multiplier = 1.0
+        if posterior is not None:
+            trust_multiplier = posterior_trust_multiplier(
+                posterior.alpha,
+                posterior.beta,
+                min_multiplier=settings.posterior_trust_min_multiplier,
+                max_multiplier=settings.posterior_trust_max_multiplier,
+            )
+        if not settings.enable_posterior_trust_weighting:
+            trust_multiplier = 1.0
 
         membership = await graph_repo.get_wallet_cluster_member(db, evt.wallet_address)
 
@@ -269,7 +281,19 @@ async def load_convergence_buyers(token_mint: str, db: AsyncSession) -> list[Buy
             cluster_id=cluster_id,
             cluster_type=cluster_type,
             cluster_size=cluster_size,
+            trust_multiplier=trust_multiplier,
         ))
+
+    if settings.enable_posterior_trust_shadow_logging and buy_records:
+        trust_values = [b.trust_multiplier for b in buy_records]
+        log.info(
+            "convergence_trust_shadow token=%s weighting_enabled=%s min=%.3f max=%.3f avg=%.3f",
+            token_mint,
+            settings.enable_posterior_trust_weighting,
+            min(trust_values),
+            max(trust_values),
+            sum(trust_values) / len(trust_values),
+        )
 
     return buy_records
 

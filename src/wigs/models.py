@@ -63,7 +63,7 @@ DECISION = Enum(
     name="decision",
 )
 RISK_LEVEL = Enum("LOW", "MEDIUM", "HIGH", "CRITICAL", name="risk_level")
-ALERT_CHANNEL = Enum("TELEGRAM", "DISCORD", "EMAIL", "LOG", name="alert_channel")
+ALERT_CHANNEL = Enum("TELEGRAM", "DISCORD", "SLACK", "EMAIL", "LOG", name="alert_channel")
 DELIVERY_STATUS = Enum("SENT", "FAILED", "SKIPPED", name="delivery_status")
 OUTCOME_LABEL = Enum(
     "RUG", "DEAD_ON_ARRIVAL", "ONE_CYCLE_PUMP", "TRADEABLE_RUNNER", "SURVIVOR", "HEAVY_HITTER",
@@ -151,6 +151,27 @@ class WalletBetaPosterior(Base):
     alpha: Mapped[float] = mapped_column(Float, nullable=False, default=2.0)  # successes + prior
     beta: Mapped[float] = mapped_column(Float, nullable=False, default=2.0)   # failures + prior
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_utc, onupdate=now_utc)
+
+
+class WalletOutcomeApplication(Base):
+    """Idempotency ledger for wallet posterior outcome updates."""
+
+    __tablename__ = "wallet_outcome_applications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    wallet_address: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    token_outcome_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("token_outcomes.id"),
+        nullable=False,
+        index=True,
+    )
+    token_mint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_utc)
+
+    __table_args__ = (
+        UniqueConstraint("wallet_address", "token_outcome_id"),
+    )
 
 
 class WalletCluster(Base):

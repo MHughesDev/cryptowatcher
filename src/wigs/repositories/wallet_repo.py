@@ -5,9 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import desc, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wigs.models import TrackedWallet, WalletBetaPosterior, WalletEvent, WalletScoreSnapshot
+from wigs.models import (
+    TrackedWallet,
+    WalletBetaPosterior,
+    WalletEvent,
+    WalletOutcomeApplication,
+    WalletScoreSnapshot,
+)
 
 
 async def upsert_tracked_wallet(
@@ -168,3 +175,55 @@ async def get_wallet_beta_posterior(
         select(WalletBetaPosterior).where(WalletBetaPosterior.wallet_address == address)
     )
     return result.scalar_one_or_none()
+
+
+async def has_wallet_outcome_application(
+    db: AsyncSession,
+    wallet_address: str,
+    token_outcome_id,
+) -> bool:
+    result = await db.execute(
+        select(WalletOutcomeApplication.id).where(
+            WalletOutcomeApplication.wallet_address == wallet_address,
+            WalletOutcomeApplication.token_outcome_id == token_outcome_id,
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def save_wallet_outcome_application(
+    db: AsyncSession,
+    wallet_address: str,
+    token_outcome_id,
+    token_mint: str,
+) -> WalletOutcomeApplication:
+    application = WalletOutcomeApplication(
+        wallet_address=wallet_address,
+        token_outcome_id=token_outcome_id,
+        token_mint=token_mint,
+    )
+    db.add(application)
+    await db.flush()
+    return application
+
+
+async def claim_wallet_outcome_application(
+    db: AsyncSession,
+    wallet_address: str,
+    token_outcome_id,
+    token_mint: str,
+) -> bool:
+    stmt = (
+        insert(WalletOutcomeApplication)
+        .values(
+            wallet_address=wallet_address,
+            token_outcome_id=token_outcome_id,
+            token_mint=token_mint,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["wallet_address", "token_outcome_id"],
+        )
+        .returning(WalletOutcomeApplication.id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None

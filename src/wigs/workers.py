@@ -25,6 +25,7 @@ from wigs.clients import dexscreener, helius, jupiter, solana_rpc
 from wigs.config import get_settings
 from wigs.database import AsyncSessionLocal
 from wigs.models import WalletCluster, WalletClusterMember
+from wigs.observability import metrics
 from wigs.pipeline import fetch_risk_data, load_convergence_buyers
 from wigs.repositories import alert_repo, graph_repo, token_repo, wallet_repo
 
@@ -167,8 +168,8 @@ async def update_wallet_posteriors() -> None:
         log.info("Updated posteriors for %d wallet-event rows", updated)
 
 
-async def refresh_tracked_wallet_set() -> None:
-    """Discover and add new tracked wallets from recent successful outcomes."""
+async def discover_new_wallets() -> None:
+    """Discover and add wallets (additive only), then score those with available events."""
     async with AsyncSessionLocal() as db:
         outcomes = await alert_repo.list_recent_completed_outcomes(db, limit=200)
         historical_winner_mints = [
@@ -189,15 +190,49 @@ async def refresh_tracked_wallet_set() -> None:
             solana_rpc,
             db,
         )
+        discovered_count = len(discovered)
+        added = 0
+        existing = 0
+        reactivated = 0
+        scored = 0
+        skipped_no_events = 0
         for wallet_address in discovered:
+            existing_wallet = await wallet_repo.get_tracked_wallet(db, wallet_address)
+            if existing_wallet is None:
+                added += 1
+            else:
+                existing += 1
+                if not existing_wallet.is_active:
+                    reactivated += 1
+            await wallet_repo.upsert_tracked_wallet(
+                db,
+                wallet_address,
+                source="seed_builder",
+                wallet_type=existing_wallet.wallet_type if existing_wallet else "SCOUT",
+            )
             events = await wallet_repo.get_recent_wallet_events(db, wallet_address, limit=100)
             if not events:
+                skipped_no_events += 1
                 continue
             trades = _wallet_events_to_trades(events)
             scores = wallet_quality.score_wallet(wallet_address, trades, [], 0.0)
             await wallet_repo.save_wallet_score(db, wallet_address, scores)
+            scored += 1
         await db.commit()
-        log.info("Refreshed tracked wallet set with %d discovered wallets", len(discovered))
+        log.info(
+            "Wallet discovery complete | discovered=%d added=%d existing=%d reactivated=%d scored=%d skipped_no_events=%d",
+            discovered_count,
+            added,
+            existing,
+            reactivated,
+            scored,
+            skipped_no_events,
+        )
+
+
+async def refresh_tracked_wallet_set() -> None:
+    """Backward-compatible wrapper for legacy job name."""
+    await discover_new_wallets()
 
 
 async def update_wallet_scores() -> None:
@@ -205,6 +240,9 @@ async def update_wallet_scores() -> None:
     async with AsyncSessionLocal() as db:
         wallets = await wallet_repo.list_active_wallets(db)
         updated = 0
+        active_count = 0
+        degraded_count = 0
+        retired_count = 0
         now = datetime.utcnow()
         for wallet in wallets:
             events = await wallet_repo.get_recent_wallet_events(db, wallet.wallet_address, limit=100)
@@ -228,14 +266,27 @@ async def update_wallet_scores() -> None:
             if quality < settings.wallet_degraded_quality_threshold:
                 wallet.lifecycle = "RETIRED"
                 wallet.is_active = False
+                retired_count += 1
             elif quality < settings.wallet_active_quality_threshold:
                 wallet.lifecycle = "DEGRADED"
+                degraded_count += 1
             else:
                 wallet.lifecycle = "ACTIVE"
                 wallet.is_active = True
+                active_count += 1
             updated += 1
         await db.commit()
-        log.info("Updated wallet scores for %d wallets", updated)
+        metrics.set_gauge("wallet_lifecycle_active", active_count)
+        metrics.set_gauge("wallet_lifecycle_degraded", degraded_count)
+        metrics.set_gauge("wallet_lifecycle_retired", retired_count)
+        metrics.incr("wallet_scores_updated", updated)
+        log.info(
+            "Updated wallet scores | updated=%d active=%d degraded=%d retired=%d",
+            updated,
+            active_count,
+            degraded_count,
+            retired_count,
+        )
 
 
 async def rebuild_wallet_clusters() -> None:
@@ -295,7 +346,7 @@ def build_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(label_alert_outcomes, "interval", minutes=15, id="label_outcomes", max_instances=1, coalesce=True)
     scheduler.add_job(update_wallet_posteriors, "interval", hours=6, id="update_posteriors", max_instances=1, coalesce=True)
     scheduler.add_job(update_wallet_scores, "interval", hours=6, id="update_wallet_scores", max_instances=1, coalesce=True)
-    scheduler.add_job(refresh_tracked_wallet_set, "interval", hours=24, id="refresh_wallets", max_instances=1, coalesce=True)
+    scheduler.add_job(discover_new_wallets, "interval", hours=24, id="discover_new_wallets", max_instances=1, coalesce=True)
     scheduler.add_job(rebuild_wallet_clusters, "interval", hours=24, id="rebuild_clusters", max_instances=1, coalesce=True)
     scheduler.add_job(retrain_wallet_quality_weights, "cron", day=1, hour=0, minute=0, id="retrain_wallet_quality_weights", max_instances=1, coalesce=True)
     scheduler.add_job(run_backtest, "cron", day_of_week="sun", hour=1, minute=0, id="run_backtest", max_instances=1, coalesce=True)

@@ -29,6 +29,7 @@ class BuyRecord:
     cluster_id: str | None       # None = no cluster (fully independent)
     cluster_type: str | None     # SMART_MONEY / CABAL_SUSPECT / BOT_FARM / etc.
     cluster_size: int = 1
+    trust_multiplier: float = 1.0
 
 
 @dataclass
@@ -137,7 +138,7 @@ def compute_convergence_score(
             continue  # excluded wallet — skip but still track time
 
         rec_weight = _recency_weight(record.event_time, now)
-        weighted_sum += record.wallet_quality * rec_weight * ind_weight
+        weighted_sum += record.wallet_quality * rec_weight * ind_weight * max(0.0, record.trust_multiplier)
         entry_times.append(record.event_time)
 
     spread = _time_spread(entry_times)

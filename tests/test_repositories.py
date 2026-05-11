@@ -125,6 +125,9 @@ async def test_load_convergence_buyers_uses_repository_layer(monkeypatch):
     async def fake_get_wallet_score(db, address):
         return SimpleNamespace(wallet_quality=88)
 
+    async def fake_get_wallet_beta_posterior(db, address):
+        return SimpleNamespace(alpha=8.0, beta=2.0)
+
     async def fake_get_wallet_cluster_member(db, address):
         return SimpleNamespace(cluster_id="cluster-1")
 
@@ -136,6 +139,7 @@ async def test_load_convergence_buyers_uses_repository_layer(monkeypatch):
 
     monkeypatch.setattr(wallet_repo, "get_wallet_events_for_token", fake_get_wallet_events_for_token)
     monkeypatch.setattr(wallet_repo, "get_wallet_score", fake_get_wallet_score)
+    monkeypatch.setattr(wallet_repo, "get_wallet_beta_posterior", fake_get_wallet_beta_posterior)
     monkeypatch.setattr("wigs.pipeline.graph_repo.get_wallet_cluster_member", fake_get_wallet_cluster_member)
     monkeypatch.setattr("wigs.pipeline.graph_repo.get_wallet_cluster", fake_get_wallet_cluster)
     monkeypatch.setattr("wigs.pipeline.graph_repo.get_cluster_member_count", fake_get_cluster_member_count)
@@ -148,3 +152,4 @@ async def test_load_convergence_buyers_uses_repository_layer(monkeypatch):
     assert buyers[0].cluster_id == "cluster-1"
     assert buyers[0].cluster_type == "SMART_MONEY"
     assert buyers[0].cluster_size == 4
+    assert buyers[0].trust_multiplier == 1.0
