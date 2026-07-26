@@ -51,6 +51,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+twitter = [
+    "twikit>=2.2.0",               # unofficial X/Twitter internal API client; no API key required
+]
 dev = [
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",

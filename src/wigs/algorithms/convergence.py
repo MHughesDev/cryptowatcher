@@ -17,6 +17,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from wigs.config import get_settings
+from wigs.filters import (
+    convergence_confidence,
+    convergence_threshold_adjustment,
+    independence_weight as _independence_weight_fn,
+    time_compression_factor as _time_compression_factor_fn,
+)
 
 settings = get_settings()
 
@@ -49,29 +55,13 @@ def _recency_weight(event_time: datetime, now: datetime) -> float:
 
 
 def _independence_weight(record: BuyRecord) -> float:
-    """
-    Excluded wallets (cabal/bot): 0.0
-    Smart-money cluster members: 1/cluster_size (shared vote)
-    Fully independent wallets: 1.0
-    """
-    if record.cluster_type in ("CABAL_SUSPECT", "BOT_FARM", "DEV_SUSPECT"):
-        return 0.0
-    if record.cluster_id is not None and record.cluster_type == "SMART_MONEY":
-        return 1.0 / max(1, record.cluster_size)
-    return 1.0
+    """Delegate to filters.independence_weight — single source of truth."""
+    return _independence_weight_fn(record.cluster_type, record.cluster_id, record.cluster_size)
 
 
 def _time_compression_factor(spread_seconds: float) -> float:
-    """
-    ≤ 5 min spread  → 2.0x  (very tight convergence)
-    5–30 min spread → linear interpolation 1.0–2.0x
-    > 30 min spread → 1.0x  (no compression bonus)
-    """
-    if spread_seconds <= 300:
-        return 2.0
-    if spread_seconds > 1800:
-        return 1.0
-    return 1.0 + (1.0 - spread_seconds / 1800)
+    """Delegate to filters.time_compression_factor — single source of truth."""
+    return _time_compression_factor_fn(spread_seconds)
 
 
 def _time_spread(times: list[datetime]) -> float:
@@ -143,13 +133,12 @@ def compute_convergence_score(
     spread = _time_spread(entry_times)
     compression = _time_compression_factor(spread)
 
-    # independence_confidence: shrinks score until 3 confirmed independent wallets
-    confidence = min(1.0, independent_count / 3.0)
+    confidence = convergence_confidence(independent_count)
 
     raw_score = weighted_sum * compression * confidence
     score = _normalize(raw_score)
 
-    threshold_adj = get_threshold_adjustment(independent_count)
+    threshold_adj = convergence_threshold_adjustment(independent_count)
 
     forced_strong_watch = (
         independent_count >= settings.convergence_forced_upgrade_min_wallets
@@ -168,13 +157,5 @@ def compute_convergence_score(
 
 
 def get_threshold_adjustment(independent_buyer_count: int) -> int:
-    """
-    Number of points to subtract from decision thresholds (making them easier to reach).
-
-    1 wallet → 0 pts adjustment
-    2 wallets → 5 pts
-    3 wallets → 10 pts
-    4 wallets → 15 pts
-    5+ wallets → 20 pts (cap)
-    """
-    return min(20, max(0, (independent_buyer_count - 1) * 5))
+    """Delegate to filters.convergence_threshold_adjustment — single source of truth."""
+    return convergence_threshold_adjustment(independent_buyer_count)

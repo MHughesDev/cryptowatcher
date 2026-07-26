@@ -30,6 +30,7 @@ Ground truth:         Solana RPC
 | Discord trend | Discord API | Free, rate-limited; bot needs server access and correct intents. | Track server/channel mentions in communities with permission. | Gateway events, channel message APIs. |
 | News/event trend | GDELT 2.0 | Free/open. | Verify whether token narrative maps to a real event, culture, or news trend. | GDELT DOC API, raw data, BigQuery. |
 | Video trend | YouTube Data API | Default quota: 10,000 units/day. | Search videos/shorts/channels for ticker, name, or narrative mentions. | Search, videos, channels. |
+| Social trend | X/Twitter (twikit) | No API key required. Uses X's internal API via the `twikit` library. Account username + password only. Free but unofficial — can break if X changes internal endpoints. | Search recent posts for token symbol, cashtag ($SYMBOL), and mint address. Filter by account age (≥30 days) and follower count (≥10) to discard bot noise. Feeds social velocity and novelty scoring. | Internal tweet search endpoint via `twikit`. |
 
 ## MVP priority ranking
 
@@ -43,13 +44,14 @@ Ground truth:         Solana RPC
 | 6 | Birdeye | Enrichment and security data within free tier. |
 | 7 | Reddit + Telegram + Discord | Social traction confirmation. |
 | 8 | GDELT + YouTube | Real-world and broader narrative confirmation. |
-| 9 | Bitquery | Pump.fun-specific context when quota allows. |
+| 9 | X/Twitter (twikit) | High-signal social source; disabled by default due to unofficial API status. Enable with `ENABLE_TWITTER=true` + credentials. |
+| 10 | Bitquery | Pump.fun-specific context when quota allows. |
 
 ## Excluded from free MVP
 
 | Source | Reason |
 |---|---|
-| X/Twitter API | No longer a clean free source for this use case. |
+| X/Twitter official API | Free tier eliminated in early 2026. Pay-per-use pricing is cost-prohibitive at monitoring scale. Use `twikit` instead (see above). |
 | Nansen / Arkham / paid wallet labels | Useful later; not required if wallet labels are built in-house. |
 | Private Discord/Telegram groups without permission | Not acceptable unless the bot/client is invited and usage follows platform rules. |
 | Paid Pump.fun event streams | Add later if needed; must not be required for MVP. |

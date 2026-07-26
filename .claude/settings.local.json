@@ -5,7 +5,10 @@
       "Bash(pip install:*)",
       "Bash(alembic init:*)",
       "Bash(python -m alembic init alembic)",
-      "Bash(python -m pytest tests/test_convergence.py tests/test_safety_veto.py tests/test_feedback.py -v)"
+      "Bash(python -m pytest tests/test_convergence.py tests/test_safety_veto.py tests/test_feedback.py -v)",
+      "Bash(grep:*)",
+      "Bash(python -m pytest tests/ --tb=short -q)",
+      "Bash(python -m pytest tests/ -q)"
     ]
   }
 }

@@ -14,6 +14,15 @@ from dataclasses import dataclass, field
 from wigs.clients import gdelt, reddit, youtube
 from wigs.clients.reddit import MentionRecord
 from wigs.config import get_settings
+from wigs.filters import (
+    SOCIAL_GDELT_ARTICLES_FOR_MAX_RELEVANCE,
+    SOCIAL_GDELT_NARRATIVE_MIN_RELEVANCE,
+    SOCIAL_PLATFORMS_FOR_MAX_SCORE,
+    SOCIAL_QUALITY_ACCOUNT_MIN_AGE_DAYS,
+    SOCIAL_QUALITY_ACCOUNTS_FOR_MAX_SCORE,
+    SOCIAL_REDDIT_MENTIONS_FOR_MAX_SCORE,
+    SOCIAL_YOUTUBE_MENTIONS_FOR_MAX_SCORE,
+)
 
 settings = get_settings()
 
@@ -117,9 +126,12 @@ def compute_velocity_acceleration(records: list[MentionRecord]) -> float:
 
 
 def score_unique_sources(records: list[MentionRecord]) -> float:
-    """Count quality accounts (age > 30 days) across distinct account IDs."""
-    quality = {r.account_id for r in records if r.account_age_days > 30}
-    return min(1.0, len(quality) / 20.0)   # normalize: 20 quality accounts = score 1.0
+    """Count quality accounts across distinct account IDs.
+
+    Account age gate and normalization ceiling are defined in filters.py.
+    """
+    quality = {r.account_id for r in records if r.account_age_days > SOCIAL_QUALITY_ACCOUNT_MIN_AGE_DAYS}
+    return min(1.0, len(quality) / SOCIAL_QUALITY_ACCOUNTS_FOR_MAX_SCORE)
 
 
 def _normalize_0_100(value: float) -> int:
@@ -139,7 +151,7 @@ def build_search_terms(token_mint: str, symbol: str | None, name: str | None) ->
 
 def classify_narrative(symbol: str | None, name: str | None, gdelt_relevance: float) -> str:
     text = f"{symbol or ''} {name or ''}".lower()
-    if gdelt_relevance > 0.3:
+    if gdelt_relevance > SOCIAL_GDELT_NARRATIVE_MIN_RELEVANCE:
         return "REAL_WORLD_EVENT"
     animals = ["dog", "cat", "pepe", "frog", "shib", "inu", "bear", "bull", "whale", "shark"]
     if any(a in text for a in animals):
@@ -187,7 +199,7 @@ async def fetch_and_score(
     if gdelt_articles:
         platforms_with_data += 1
 
-    gdelt_relevance = min(1.0, len(gdelt_articles) / 5.0)
+    gdelt_relevance = min(1.0, len(gdelt_articles) / SOCIAL_GDELT_ARTICLES_FOR_MAX_RELEVANCE)
 
     evidence = SocialEvidence(
         reddit_mentions=len(reddit_records),
@@ -210,9 +222,9 @@ async def fetch_and_score(
         + 0.20 * unique_src_score
         + 0.15 * evidence.novelty_score
         + 0.15 * gdelt_relevance
-        + 0.10 * min(1.0, evidence.reddit_mentions / 20)
-        + 0.10 * min(1.0, platforms_with_data / 3)
-        + 0.05 * min(1.0, evidence.youtube_mentions / 5)
+        + 0.10 * min(1.0, evidence.reddit_mentions / SOCIAL_REDDIT_MENTIONS_FOR_MAX_SCORE)
+        + 0.10 * min(1.0, platforms_with_data / SOCIAL_PLATFORMS_FOR_MAX_SCORE)
+        + 0.05 * min(1.0, evidence.youtube_mentions / SOCIAL_YOUTUBE_MENTIONS_FOR_MAX_SCORE)
     )
 
     narrative = classify_narrative(symbol, name, gdelt_relevance)

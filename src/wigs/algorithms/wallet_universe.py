@@ -5,6 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from wigs.filters import (
+    WALLET_UNIVERSE_FIRST_WINDOW_SECONDS,
+    WALLET_UNIVERSE_HISTORICAL_MIN_MULTIPLE,
+    WALLET_UNIVERSE_KOL_LOOKBACK_HOURS,
+    WALLET_UNIVERSE_WHALE_THRESHOLD_USD,
+)
 from wigs.repositories import wallet_repo
 
 
@@ -24,7 +30,7 @@ def _extract_time(trade: dict[str, Any]) -> datetime | None:
 async def discover_from_historical_winners(
     token_mints: list[str],
     helius_client,
-    min_multiple: float = 3.0,
+    min_multiple: float = WALLET_UNIVERSE_HISTORICAL_MIN_MULTIPLE,
 ) -> list[str]:
     wallets: set[str] = set()
     for mint in token_mints:
@@ -39,7 +45,7 @@ async def discover_from_historical_winners(
                 continue
             if first_time is None:
                 first_time = trade_time
-            if (trade_time - first_time).total_seconds() <= 1800:
+            if (trade_time - first_time).total_seconds() <= WALLET_UNIVERSE_FIRST_WINDOW_SECONDS:
                 first_window_wallets.append(wallet)
         wallets.update(first_window_wallets)
     return sorted(wallets)
@@ -48,7 +54,7 @@ async def discover_from_historical_winners(
 async def discover_pre_whale_wallets(
     token_mints: list[str],
     solana_rpc_client,
-    whale_threshold_usd: float = 50_000,
+    whale_threshold_usd: float = WALLET_UNIVERSE_WHALE_THRESHOLD_USD,
 ) -> list[str]:
     wallets: set[str] = set()
     for mint in token_mints:
@@ -73,7 +79,7 @@ async def discover_pre_whale_wallets(
 async def discover_kol_precall_wallets(
     kol_wallet_addresses: list[str],
     helius_client,
-    lookback_hours: int = 6,
+    lookback_hours: int = WALLET_UNIVERSE_KOL_LOOKBACK_HOURS,
 ) -> list[str]:
     wallets: set[str] = set()
     for kol_wallet in kol_wallet_addresses:

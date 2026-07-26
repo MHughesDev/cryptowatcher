@@ -7,17 +7,15 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
+from wigs.filters import (
+    EARLY_ENTRY_PERCENTILE_THRESHOLD,
+    EXIT_QUALITY_IMPACT_PENALTY_FACTOR,
+    EXIT_QUALITY_IMPACT_PENALTY_TRIGGER,
+    PNL_SCORE_NORMALIZATION_USD,
+    WALLET_QUALITY_DEFAULT_WEIGHTS,
+)
 
-DEFAULT_WEIGHTS = {
-    "pnl": 0.22,
-    "early_entry": 0.18,
-    "lead_lag": 0.18,
-    "exit_quality": 0.14,
-    "rug_avoidance": 0.12,
-    "repeatability": 0.08,
-    "independence": 0.05,
-    "freshness": 0.03,
-}
+DEFAULT_WEIGHTS = WALLET_QUALITY_DEFAULT_WEIGHTS
 
 
 def _clamp_0_100(value: float) -> float:
@@ -38,7 +36,7 @@ def calculate_realized_pnl_score(trades: list[dict]) -> float:
     total = sum(_extract_trade_return(trade) for trade in trades)
     if total <= 0:
         return 0.0
-    score = math.log1p(total) / math.log1p(10_000) * 100.0
+    score = math.log1p(total) / math.log1p(PNL_SCORE_NORMALIZATION_USD) * 100.0
     return _clamp_0_100(score)
 
 
@@ -54,7 +52,7 @@ def calculate_early_entry_score(trades: list[dict]) -> float:
             total = float(trade.get("buyer_count", trade.get("buyers_total", 1)) or 1)
             percentile = rank / total
         percentile = max(0.0, min(1.0, float(percentile)))
-        if percentile <= 0.2:
+        if percentile <= EARLY_ENTRY_PERCENTILE_THRESHOLD:
             early_hits += 1.0
 
     score = (early_hits / len(trades)) * 100.0
@@ -73,8 +71,8 @@ def calculate_exit_quality_score(trades: list[dict]) -> float:
             drawdown = float(trade.get("max_drawdown_after_sell", 0.0))
             entry_price = float(trade.get("entry_price", 1.0) or 1.0)
             quality = 1.0 - max(0.0, drawdown / entry_price)
-        if float(trade.get("exit_price_impact", 0.0)) > 0.15:
-            quality *= 0.5
+        if float(trade.get("exit_price_impact", 0.0)) > EXIT_QUALITY_IMPACT_PENALTY_TRIGGER:
+            quality *= EXIT_QUALITY_IMPACT_PENALTY_FACTOR
         quality_sum += max(0.0, min(1.0, quality))
 
     return _clamp_0_100((quality_sum / len(trades)) * 100.0)

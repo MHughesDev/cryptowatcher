@@ -59,12 +59,17 @@ class Settings(BaseSettings):
     wallet_active_quality_threshold: int = 50
     wallet_degraded_quality_threshold: int = 25
 
+    # ── Twitter / X (twikit — unofficial, no API key) ─────────────────────────
+    twitter_username: str = ""
+    twitter_password: str = ""
+
     # ── Feature flags ─────────────────────────────────────────────────────────
     enable_telegram_alerts: bool = True
     enable_discord_alerts: bool = True
     enable_social_scoring: bool = True
     enable_gdelt: bool = True
     enable_youtube: bool = True
+    enable_twitter: bool = False  # off by default; twikit violates X ToS
 
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property
