@@ -33,6 +33,12 @@ from wigs.algorithms.safety_veto import ConcentrationReport, RiskReport, compute
 from wigs.algorithms.social_verifier import SocialScore, fetch_and_score
 from wigs.clients import birdeye, helius, jupiter, solana_rpc
 from wigs.config import get_settings
+from wigs.filters import (
+    WALLET_SCORE_CONVERGENCE_WEIGHT,
+    WALLET_SCORE_DEFAULT_QUALITY,
+    WALLET_SCORE_QUALITY_WEIGHT,
+    should_alert,
+)
 from wigs.models import CandidateToken, TrackedWallet, WalletEvent
 from wigs.repositories import graph_repo, token_repo, wallet_repo
 
@@ -461,8 +467,8 @@ async def handle_wallet_event(
     # ── 6. Score components ──────────────────────────────────────────────
     market_score = score_market(market_ctx)
     wallet_score = min(100, int(
-        0.70 * convergence.convergence_score
-        + 0.30 * (buyers[0].wallet_quality if buyers else 50)
+        WALLET_SCORE_CONVERGENCE_WEIGHT * convergence.convergence_score
+        + WALLET_SCORE_QUALITY_WEIGHT * (buyers[0].wallet_quality if buyers else WALLET_SCORE_DEFAULT_QUALITY)
     ))
     history_score = await analyze_history(
         event.token_mint,
@@ -509,7 +515,7 @@ async def handle_wallet_event(
     await db.flush()
 
     # ── 9. Alert ─────────────────────────────────────────────────────────
-    if result.decision in ("STRONG_WATCH", "STRONG_CANDIDATE"):
+    if should_alert(result.decision):
         from wigs.alerts import publish_alert
         await publish_alert(candidate, token_score, db)
 

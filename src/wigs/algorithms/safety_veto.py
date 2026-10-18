@@ -12,6 +12,26 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from wigs.config import get_settings
+from wigs.filters import (
+    DS_AUTHORITY_FREEZE_WEIGHT,
+    DS_AUTHORITY_MINT_WEIGHT,
+    DS_CONCENTRATION_GINI_WEIGHT,
+    DS_CONCENTRATION_HHI_WEIGHT,
+    DS_CONCENTRATION_TOP10_WEIGHT,
+    DS_HARD_VETO_THRESHOLD,
+    DS_LIQUIDITY_RISKY_HIGH,
+    DS_LIQUIDITY_RISKY_MARGINAL,
+    DS_SOFT_PENALTY_THRESHOLD,
+    PENALTY_CLUSTER_NOT_INDEPENDENT,
+    PENALTY_DS_PARTIAL_RISK,
+    PENALTY_KOL_ALREADY_CALLED,
+    PENALTY_POOL_TOO_NEW,
+    PENALTY_SINGLE_WALLET_SIGNAL,
+    PENALTY_SOCIAL_TOO_THIN,
+    PENALTY_VOLUME_TOO_BOTLIKE,
+    POOL_AGE_SOFT_PENALTY_MINUTES,
+    VOLUME_AUTHENTICITY_MIN_RATIO,
+)
 
 settings = get_settings()
 
@@ -120,30 +140,30 @@ def _ds_combine(bpas: list[dict[str, float]]) -> dict[str, float]:
 
 def _bpa_from_concentration(report: ConcentrationReport) -> dict[str, float]:
     risky = 0.0
-    if report.gini > 0.90:
-        risky += 0.5
-    if report.hhi > 0.25:
-        risky += 0.3
-    if report.top_10_pct > 0.60:
-        risky += 0.2
+    if report.gini > settings.max_gini_coefficient:
+        risky += DS_CONCENTRATION_GINI_WEIGHT
+    if report.hhi > settings.max_hhi:
+        risky += DS_CONCENTRATION_HHI_WEIGHT
+    if report.top_10_pct > settings.max_top_10_holder_pct:
+        risky += DS_CONCENTRATION_TOP10_WEIGHT
     risky = min(1.0, risky)
     return {"RISKY": risky, "SAFE": max(0.0, 0.8 - risky), "UNCERTAIN": min(0.2, 1.0 - risky)}
 
 
 def _bpa_from_liquidity(liquidity_usd: float) -> dict[str, float]:
     if liquidity_usd < settings.min_liquidity_usd:
-        return {"RISKY": 0.8, "SAFE": 0.0, "UNCERTAIN": 0.2}
+        return {"RISKY": DS_LIQUIDITY_RISKY_HIGH, "SAFE": 0.0, "UNCERTAIN": 1.0 - DS_LIQUIDITY_RISKY_HIGH}
     if liquidity_usd < settings.min_liquidity_usd * 3:
-        return {"RISKY": 0.3, "SAFE": 0.4, "UNCERTAIN": 0.3}
+        return {"RISKY": DS_LIQUIDITY_RISKY_MARGINAL, "SAFE": 0.4, "UNCERTAIN": 0.3}
     return {"RISKY": 0.0, "SAFE": 0.8, "UNCERTAIN": 0.2}
 
 
 def _bpa_from_authority(mint_active: bool | None, freeze_active: bool | None) -> dict[str, float]:
     risk = 0.0
     if mint_active:
-        risk += 0.6
+        risk += DS_AUTHORITY_MINT_WEIGHT
     if freeze_active:
-        risk += 0.4
+        risk += DS_AUTHORITY_FREEZE_WEIGHT
     risk = min(1.0, risk)
     return {"RISKY": risk, "SAFE": max(0.0, 1.0 - risk - 0.1), "UNCERTAIN": 0.1}
 
@@ -206,23 +226,23 @@ def evaluate(
         vetoes.append("SOCIAL_DRAINER_LINK")
 
     # ── Soft penalties ─────────────────────────────────────────────────────
-    if pool_age_minutes is not None and pool_age_minutes < 10:
-        penalties.append(("POOL_TOO_NEW", 15))
+    if pool_age_minutes is not None and pool_age_minutes < POOL_AGE_SOFT_PENALTY_MINUTES:
+        penalties.append(("POOL_TOO_NEW", PENALTY_POOL_TOO_NEW))
 
-    if volume_authenticity_ratio is not None and volume_authenticity_ratio < 0.2:
-        penalties.append(("VOLUME_TOO_BOTLIKE", 20))
+    if volume_authenticity_ratio is not None and volume_authenticity_ratio < VOLUME_AUTHENTICITY_MIN_RATIO:
+        penalties.append(("VOLUME_TOO_BOTLIKE", PENALTY_VOLUME_TOO_BOTLIKE))
 
     if not has_social_data:
-        penalties.append(("SOCIAL_TOO_THIN", 10))
+        penalties.append(("SOCIAL_TOO_THIN", PENALTY_SOCIAL_TOO_THIN))
 
     if independent_buyer_count == 1:
-        penalties.append(("SINGLE_WALLET_SIGNAL", 10))
+        penalties.append(("SINGLE_WALLET_SIGNAL", PENALTY_SINGLE_WALLET_SIGNAL))
 
     if not cluster_is_independent:
-        penalties.append(("CLUSTER_NOT_INDEPENDENT", 20))
+        penalties.append(("CLUSTER_NOT_INDEPENDENT", PENALTY_CLUSTER_NOT_INDEPENDENT))
 
     if kol_already_called:
-        penalties.append(("KOL_ALREADY_CALLED", 15))
+        penalties.append(("KOL_ALREADY_CALLED", PENALTY_KOL_ALREADY_CALLED))
 
     # ── Dempster-Shafer combination for partial signals ────────────────────
     bpas = [
@@ -233,10 +253,10 @@ def evaluate(
     ds_result = _ds_combine(bpas)
     ds_risky = ds_result.get("RISKY", 0.0)
 
-    if ds_risky > 0.85 and not vetoes:
+    if ds_risky > DS_HARD_VETO_THRESHOLD and not vetoes:
         vetoes.append("DS_COMBINED_RISK")
-    elif ds_risky > 0.60:
-        penalties.append(("DS_PARTIAL_RISK", 20))
+    elif ds_risky > DS_SOFT_PENALTY_THRESHOLD:
+        penalties.append(("DS_PARTIAL_RISK", PENALTY_DS_PARTIAL_RISK))
 
     # ── Compute final risk score ───────────────────────────────────────────
     if vetoes:

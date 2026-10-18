@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     wallet_active_quality_threshold: int = 50
     wallet_degraded_quality_threshold: int = 25
 
+    # ── Twitter / X (twikit — unofficial, no API key) ─────────────────────────
+    twitter_username: str = ""
+    twitter_password: str = ""
+
     # ── Feature flags ─────────────────────────────────────────────────────────
     enable_telegram_alerts: bool = True
     enable_discord_alerts: bool = True
@@ -76,6 +80,7 @@ class Settings(BaseSettings):
     kol_precall_min_lead_seconds: int = 60
     kol_precall_max_lead_seconds: int = 21600
     kol_precall_wallet_blocklist: list[str] = Field(default_factory=list)
+    enable_twitter: bool = False  # off by default; twikit violates X ToS
 
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property

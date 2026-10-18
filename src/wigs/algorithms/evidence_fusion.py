@@ -15,6 +15,16 @@ from wigs.algorithms.convergence import ConvergenceResult
 from wigs.algorithms.safety_veto import RiskReport
 from wigs.algorithms.social_verifier import SocialScore
 from wigs.config import get_settings
+from wigs.filters import (
+    FUSION_WEIGHT_EXECUTION,
+    FUSION_WEIGHT_HISTORY,
+    FUSION_WEIGHT_MARKET,
+    FUSION_WEIGHT_RISK,
+    FUSION_WEIGHT_SOCIAL,
+    FUSION_WEIGHT_WALLET,
+    RISK_LEVEL_HIGH_BELOW,
+    RISK_LEVEL_MEDIUM_BELOW,
+)
 
 settings = get_settings()
 
@@ -53,9 +63,9 @@ def _classify_decision(total: int, threshold_adjustment: int) -> str:
 def _risk_level(risk_score: int, vetoes: list[str]) -> str:
     if vetoes:
         return "CRITICAL"
-    if risk_score < 40:
+    if risk_score < RISK_LEVEL_HIGH_BELOW:
         return "HIGH"
-    if risk_score < 70:
+    if risk_score < RISK_LEVEL_MEDIUM_BELOW:
         return "MEDIUM"
     return "LOW"
 
@@ -89,12 +99,12 @@ def compute_final_score(
         )
 
     total = int(
-        0.35 * wallet_score
-        + 0.20 * market_score
-        + 0.20 * risk_report.risk_score
-        + 0.15 * social_score.value
-        + 0.07 * history_score
-        + 0.03 * execution_score
+        FUSION_WEIGHT_WALLET    * wallet_score
+        + FUSION_WEIGHT_MARKET  * market_score
+        + FUSION_WEIGHT_RISK    * risk_report.risk_score
+        + FUSION_WEIGHT_SOCIAL  * social_score.value
+        + FUSION_WEIGHT_HISTORY * history_score
+        + FUSION_WEIGHT_EXECUTION * execution_score
     )
     total = min(100, max(0, total))
 

@@ -8,6 +8,8 @@ from datetime import datetime
 
 import networkx as nx
 
+from wigs.filters import COPURCHASE_MIN_SHARED_TOKENS, classify_cluster_type as _classify_cluster_type_fn
+
 try:
     import community as community_louvain
 except Exception:  # pragma: no cover
@@ -16,7 +18,7 @@ except Exception:  # pragma: no cover
 
 def build_copurchase_graph(
     copurchase_pairs: list[tuple[str, str, int]],
-    min_shared_tokens: int = 2,
+    min_shared_tokens: int = COPURCHASE_MIN_SHARED_TOKENS,
 ) -> nx.Graph:
     graph = nx.Graph()
     for wallet_a, wallet_b, shared_count in copurchase_pairs:
@@ -136,16 +138,8 @@ def score_cluster_suspicion(
 
 
 def classify_cluster(suspicion_score: float, timing_tightness: float, shared_funding: float) -> str:
-    normalized = suspicion_score / 100.0
-    if normalized > 0.80 and timing_tightness > 0.9:
-        return "BOT_FARM"
-    if shared_funding > 0.8:
-        return "DEV_SUSPECT"
-    if normalized > 0.70:
-        return "CABAL_SUSPECT"
-    if normalized < 0.30:
-        return "SMART_MONEY"
-    return "UNKNOWN"
+    """Delegate to filters.classify_cluster_type — single source of truth."""
+    return _classify_cluster_type_fn(suspicion_score, timing_tightness, shared_funding)
 
 
 def build_clusters(

@@ -24,6 +24,15 @@ from wigs.algorithms.social_verifier import SocialEvidence, SocialScore, fetch_a
 from wigs.clients import dexscreener, helius, jupiter, solana_rpc
 from wigs.config import get_settings
 from wigs.database import AsyncSessionLocal
+from wigs.filters import (
+    COPURCHASE_MIN_SHARED_TOKENS,
+    OUTCOME_MEASUREMENT_WINDOW_DAYS,
+    WALLET_SCORE_CONVERGENCE_WEIGHT,
+    WALLET_SCORE_DEFAULT_QUALITY,
+    WALLET_SCORE_QUALITY_WEIGHT,
+    is_positive_outcome,
+    qualifies_for_wallet_refresh,
+)
 from wigs.models import WalletCluster, WalletClusterMember
 from wigs.observability import metrics
 from wigs.pipeline import fetch_risk_data, load_convergence_buyers
@@ -96,7 +105,10 @@ async def refresh_open_candidate_scores() -> None:
                 )
                 wallet_score = min(
                     100,
-                    int(0.70 * convergence.convergence_score + 0.30 * (buyers[0].wallet_quality if buyers else 50)),
+                    int(
+                        WALLET_SCORE_CONVERGENCE_WEIGHT * convergence.convergence_score
+                        + WALLET_SCORE_QUALITY_WEIGHT * (buyers[0].wallet_quality if buyers else WALLET_SCORE_DEFAULT_QUALITY)
+                    ),
                 )
                 execution_score = score_execution(sell_report, settings.max_price_impact_1_sol)
                 result = compute_final_score(
@@ -136,7 +148,7 @@ async def label_alert_outcomes() -> None:
         alerts = await alert_repo.list_unlabeled_alerts(db)
         now = datetime.utcnow()
         for alert in alerts:
-            if now - alert.sent_at < timedelta(days=7):
+            if now - alert.sent_at < timedelta(days=OUTCOME_MEASUREMENT_WINDOW_DAYS):
                 continue
             try:
                 pairs = await dexscreener.get_token_pairs(alert.token_mint)
@@ -175,7 +187,7 @@ async def discover_new_wallets() -> None:
         historical_winner_mints = [
             outcome.token_mint
             for outcome in outcomes
-            if outcome.label in {"HEAVY_HITTER", "TRADEABLE_RUNNER"}
+            if qualifies_for_wallet_refresh(outcome.label)
         ]
         active_wallets = await wallet_repo.list_active_wallets(db)
         kol_wallets = [
@@ -292,7 +304,7 @@ async def update_wallet_scores() -> None:
 async def rebuild_wallet_clusters() -> None:
     """Rebuild wallet clusters from co-purchase behavior."""
     async with AsyncSessionLocal() as db:
-        copurchase_pairs = await graph_repo.get_copurchase_pairs(db, min_shared_tokens=2)
+        copurchase_pairs = await graph_repo.get_copurchase_pairs(db, min_shared_tokens=COPURCHASE_MIN_SHARED_TOKENS)
         wallets = await wallet_repo.list_active_wallets(db)
         wallet_events: list[dict[str, Any]] = []
         funding_sources: dict[str, str] = {}
@@ -333,9 +345,8 @@ async def run_backtest() -> None:
     """Weekly backtest summary over recent labeled outcomes."""
     async with AsyncSessionLocal() as db:
         outcomes = await alert_repo.list_recent_completed_outcomes(db, limit=500)
-        positive = {"HEAVY_HITTER", "TRADEABLE_RUNNER", "SURVIVOR"}
         total = len(outcomes)
-        wins = sum(1 for outcome in outcomes if outcome.label in positive)
+        wins = sum(1 for outcome in outcomes if is_positive_outcome(outcome.label))
         hit_rate = (wins / total) if total else 0.0
         log.info("Backtest summary | total=%d wins=%d hit_rate=%.3f", total, wins, hit_rate)
 
